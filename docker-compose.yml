@@ -1,0 +1,62 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: lingchou
+      POSTGRES_PASSWORD: lingchou
+      POSTGRES_DB: lingchou
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lingchou"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  migrate:
+    build:
+      context: ./backend
+    command: ["migrate", "-direction", "up"]
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: lingchou
+      DB_PASSWORD: lingchou
+      DB_NAME: lingchou
+      DB_SSLMODE: disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: ./backend
+    ports:
+      - "8080:8080"
+    environment:
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8080
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: lingchou
+      DB_PASSWORD: lingchou
+      DB_NAME: lingchou
+      DB_SSLMODE: disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+
+volumes:
+  pgdata:
