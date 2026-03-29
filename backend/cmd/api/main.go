@@ -98,6 +98,10 @@ func main() {
 	reg := runtime.NewRegistry()
 	reg.RegisterDefaults()
 
+	workflowRunRepo := repository.NewWorkflowRunRepo(db)
+	workflowStepRepo := repository.NewWorkflowStepRepo(db)
+	workflowSvc := service.NewWorkflowService(workflowRunRepo, workflowStepRepo, auditSvc)
+
 	orchServices := &orchestrator.Services{
 		Project:    projectSvc,
 		Phase:      phaseSvc,
@@ -111,7 +115,7 @@ func main() {
 		Approval:   approvalSvc,
 		Audit:      auditSvc,
 	}
-	engine := orchestrator.NewEngine(reg, orchServices, orchestrator.NewRunStore(), logger)
+	engine := orchestrator.NewEngine(reg, orchServices, workflowSvc, logger)
 	handler.NewOrchestratorHandler(engine).Register(mux)
 
 	// --- middleware chain ---

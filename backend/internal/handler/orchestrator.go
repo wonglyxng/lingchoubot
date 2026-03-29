@@ -3,9 +3,11 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/lingchou/lingchoubot/backend/internal/middleware"
 	"github.com/lingchou/lingchoubot/backend/internal/orchestrator"
+	"github.com/lingchou/lingchoubot/backend/internal/repository"
 )
 
 type OrchestratorHandler struct {
@@ -45,19 +47,42 @@ func (h *OrchestratorHandler) StartRun(w http.ResponseWriter, r *http.Request) {
 	middleware.JSON(w, http.StatusCreated, run)
 }
 
-// ListRuns returns all workflow runs (in-memory).
+// ListRuns returns paginated workflow runs from the database.
 func (h *OrchestratorHandler) ListRuns(w http.ResponseWriter, r *http.Request) {
-	runs := h.engine.Store().List()
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	if limit <= 0 {
+		limit = 20
+	}
+
+	params := repository.WorkflowRunListParams{
+		ProjectID: q.Get("project_id"),
+		Status:    q.Get("status"),
+		Limit:     limit,
+		Offset:    offset,
+	}
+
+	runs, total, err := h.engine.ListRuns(r.Context(), params)
+	if err != nil {
+		middleware.ErrorJSON(w, http.StatusInternalServerError, "LIST_ERROR", err.Error())
+		return
+	}
+
 	middleware.JSON(w, http.StatusOK, map[string]interface{}{
 		"items": runs,
-		"total": len(runs),
+		"total": total,
 	})
 }
 
-// GetRun returns a single workflow run by ID.
+// GetRun returns a single workflow run by ID with its steps.
 func (h *OrchestratorHandler) GetRun(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	run := h.engine.Store().Get(id)
+	run, err := h.engine.GetRun(r.Context(), id)
+	if err != nil {
+		middleware.ErrorJSON(w, http.StatusInternalServerError, "GET_ERROR", err.Error())
+		return
+	}
 	if run == nil {
 		middleware.ErrorJSON(w, http.StatusNotFound, "NOT_FOUND", "workflow run not found")
 		return

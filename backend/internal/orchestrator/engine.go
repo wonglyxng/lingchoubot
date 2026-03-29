@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/lingchou/lingchoubot/backend/internal/model"
 	"github.com/lingchou/lingchoubot/backend/internal/repository"
@@ -28,22 +27,41 @@ type Services struct {
 	Audit        *service.AuditService
 }
 
-// Engine orchestrates the Supervisor → Worker → Reviewer chain.
+// runCtx holds per-execution state during a workflow run.
+type runCtx struct {
+	run       *model.WorkflowRun
+	stepCount int
+}
+
+func (rc *runCtx) nextOrder() int {
+	rc.stepCount++
+	return rc.stepCount
+}
+
+// Engine orchestrates the PM → Supervisor → Worker → Reviewer chain.
 type Engine struct {
 	registry *runtime.Registry
 	services *Services
-	store    *RunStore
+	workflow *service.WorkflowService
 	logger   *slog.Logger
 }
 
-func NewEngine(reg *runtime.Registry, svc *Services, store *RunStore, logger *slog.Logger) *Engine {
-	return &Engine{registry: reg, services: svc, store: store, logger: logger}
+func NewEngine(reg *runtime.Registry, svc *Services, workflow *service.WorkflowService, logger *slog.Logger) *Engine {
+	return &Engine{registry: reg, services: svc, workflow: workflow, logger: logger}
 }
 
-func (e *Engine) Store() *RunStore { return e.store }
+// GetRun loads a workflow run with its steps.
+func (e *Engine) GetRun(ctx context.Context, id string) (*model.WorkflowRun, error) {
+	return e.workflow.GetRun(ctx, id)
+}
+
+// ListRuns returns paginated workflow runs.
+func (e *Engine) ListRuns(ctx context.Context, p repository.WorkflowRunListParams) ([]*model.WorkflowRun, int, error) {
+	return e.workflow.ListRuns(ctx, p)
+}
 
 // Run executes the full workflow for a project: PM → Supervisor → Worker → Reviewer.
-func (e *Engine) Run(ctx context.Context, projectID string) (*WorkflowRun, error) {
+func (e *Engine) Run(ctx context.Context, projectID string) (*model.WorkflowRun, error) {
 	proj, err := e.services.Project.GetByID(ctx, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("get project: %w", err)
@@ -52,70 +70,71 @@ func (e *Engine) Run(ctx context.Context, projectID string) (*WorkflowRun, error
 		return nil, fmt.Errorf("project %s not found", projectID)
 	}
 
-	run := &WorkflowRun{
-		ID:          newID(),
-		ProjectID:   proj.ID,
-		ProjectName: proj.Name,
-		Status:      RunStatusRunning,
-		StartedAt:   time.Now(),
+	run, err := e.workflow.CreateRun(ctx, proj.ID)
+	if err != nil {
+		return nil, fmt.Errorf("create workflow run: %w", err)
 	}
-	e.store.Save(run)
+	rc := &runCtx{run: run}
 
 	e.services.Audit.LogEvent(ctx, "system", "", "workflow.started",
 		fmt.Sprintf("项目「%s」工作流已启动", proj.Name),
 		"project", proj.ID, nil, map[string]string{"run_id": run.ID})
 
-	if err := e.runPMPhase(ctx, run, proj); err != nil {
-		e.failRun(ctx, run, err)
-		return run, nil
+	if err := e.runPMPhase(ctx, rc, proj); err != nil {
+		e.failRun(ctx, rc, err)
+		return e.workflow.GetRun(ctx, run.ID)
 	}
 
 	phases, err := e.services.Phase.ListByProject(ctx, proj.ID)
 	if err != nil {
-		e.failRun(ctx, run, err)
-		return run, nil
+		e.failRun(ctx, rc, err)
+		return e.workflow.GetRun(ctx, run.ID)
 	}
 
 	for _, phase := range phases {
-		if err := e.runPhase(ctx, run, proj, phase); err != nil {
+		if err := e.runPhase(ctx, rc, proj, phase); err != nil {
 			e.logger.Error("phase failed", "phase", phase.Name, "error", err)
 			continue
 		}
 	}
 
-	now := time.Now()
-	run.Status = RunStatusCompleted
-	run.CompletedAt = &now
-	run.Summary = fmt.Sprintf("项目「%s」工作流完成：%d 个阶段已处理，共 %d 步",
-		proj.Name, len(phases), len(run.Steps))
-	e.store.Save(run)
+	summary := fmt.Sprintf("项目「%s」工作流完成：%d 个阶段已处理，共 %d 步",
+		proj.Name, len(phases), rc.stepCount)
+	if err := e.workflow.CompleteRun(ctx, run, summary); err != nil {
+		e.logger.Error("complete run failed", "error", err)
+	}
 
 	e.services.Audit.LogEvent(ctx, "system", "", "workflow.completed",
-		run.Summary, "project", proj.ID, nil, map[string]string{"run_id": run.ID})
+		summary, "project", proj.ID, nil, map[string]string{"run_id": run.ID})
 
-	return run, nil
+	return e.workflow.GetRun(ctx, run.ID)
 }
 
 // runPMPhase runs the PM agent to decompose the project.
-func (e *Engine) runPMPhase(ctx context.Context, run *WorkflowRun, proj *model.Project) error {
-	step := run.AddStep("PM 项目分解", "pm")
-	step.Start()
+func (e *Engine) runPMPhase(ctx context.Context, rc *runCtx, proj *model.Project) error {
+	step, err := e.workflow.AddStep(ctx, rc.run.ID, "PM 项目分解", "pm", rc.nextOrder())
+	if err != nil {
+		return err
+	}
+	if err := e.workflow.StartStep(ctx, step); err != nil {
+		return err
+	}
 
 	pmAgent, err := e.findAgent(ctx, model.AgentRolePM)
 	if err != nil {
-		step.Fail(err.Error())
+		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
 	}
-	step.AgentID = pmAgent.ID
+	step.AgentID = &pmAgent.ID
 
 	runner, err := e.registry.Get("pm")
 	if err != nil {
-		step.Fail(err.Error())
+		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
 	}
 
 	input := &runtime.AgentTaskInput{
-		RunID:       run.ID,
+		RunID:       rc.run.ID,
 		AgentID:     pmAgent.ID,
 		AgentRole:   "pm",
 		Instruction: fmt.Sprintf("分解项目「%s」为阶段和任务", proj.Name),
@@ -124,16 +143,16 @@ func (e *Engine) runPMPhase(ctx context.Context, run *WorkflowRun, proj *model.P
 
 	output, err := runner.Execute(input)
 	if err != nil {
-		step.Fail(err.Error())
+		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return fmt.Errorf("PM agent execution failed: %w", err)
 	}
 	if output.Status == runtime.OutputStatusFailed {
-		step.Fail(output.Error)
+		_ = e.workflow.FailStep(ctx, step, output.Error)
 		return fmt.Errorf("PM agent returned failure: %s", output.Error)
 	}
 
 	if err := e.processPhaseActions(ctx, proj.ID, output.Phases); err != nil {
-		step.Fail(err.Error())
+		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
 	}
 
@@ -143,17 +162,16 @@ func (e *Engine) runPMPhase(ctx context.Context, run *WorkflowRun, proj *model.P
 		phaseMap[p.Name] = p.ID
 	}
 	if err := e.processTaskActions(ctx, proj.ID, phaseMap, output.Tasks); err != nil {
-		step.Fail(err.Error())
+		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
 	}
 
-	step.Complete(output.Summary)
-	e.store.Save(run)
+	_ = e.workflow.CompleteStep(ctx, step, output.Summary)
 	return nil
 }
 
 // runPhase processes all tasks within a phase.
-func (e *Engine) runPhase(ctx context.Context, run *WorkflowRun, proj *model.Project, phase *model.Phase) error {
+func (e *Engine) runPhase(ctx context.Context, rc *runCtx, proj *model.Project, phase *model.Phase) error {
 	tasks, _, err := e.services.Task.List(ctx, repository.TaskListParams{
 		PhaseID: phase.ID,
 		Limit:   100,
@@ -167,7 +185,7 @@ func (e *Engine) runPhase(ctx context.Context, run *WorkflowRun, proj *model.Pro
 	}
 
 	for _, task := range tasks {
-		if err := e.runTaskChain(ctx, run, proj, phase, task); err != nil {
+		if err := e.runTaskChain(ctx, rc, proj, phase, task); err != nil {
 			e.logger.Error("task chain failed", "task", task.Title, "error", err)
 		}
 	}
@@ -175,43 +193,48 @@ func (e *Engine) runPhase(ctx context.Context, run *WorkflowRun, proj *model.Pro
 }
 
 // runTaskChain executes Supervisor → Worker → Reviewer for a single task.
-func (e *Engine) runTaskChain(ctx context.Context, run *WorkflowRun, proj *model.Project, phase *model.Phase, task *model.Task) error {
-	if err := e.runSupervisor(ctx, run, proj, phase, task); err != nil {
+func (e *Engine) runTaskChain(ctx context.Context, rc *runCtx, proj *model.Project, phase *model.Phase, task *model.Task) error {
+	if err := e.runSupervisor(ctx, rc, proj, phase, task); err != nil {
 		return err
 	}
 
-	if err := e.runWorker(ctx, run, proj, phase, task); err != nil {
+	if err := e.runWorker(ctx, rc, proj, phase, task); err != nil {
 		return err
 	}
 
-	if err := e.runReviewer(ctx, run, proj, phase, task); err != nil {
+	if err := e.runReviewer(ctx, rc, proj, phase, task); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (e *Engine) runSupervisor(ctx context.Context, run *WorkflowRun, proj *model.Project, phase *model.Phase, task *model.Task) error {
-	step := run.AddStep(fmt.Sprintf("主管规划「%s」", task.Title), "supervisor")
-	step.Start()
-	step.TaskID = task.ID
-	step.PhaseID = phase.ID
+func (e *Engine) runSupervisor(ctx context.Context, rc *runCtx, proj *model.Project, phase *model.Phase, task *model.Task) error {
+	step, err := e.workflow.AddStep(ctx, rc.run.ID, fmt.Sprintf("主管规划「%s」", task.Title), "supervisor", rc.nextOrder())
+	if err != nil {
+		return err
+	}
+	if err := e.workflow.StartStep(ctx, step); err != nil {
+		return err
+	}
+	step.TaskID = &task.ID
+	step.PhaseID = &phase.ID
 
 	agent, err := e.findAgent(ctx, model.AgentRoleSupervisor)
 	if err != nil {
-		step.Fail(err.Error())
+		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
 	}
-	step.AgentID = agent.ID
+	step.AgentID = &agent.ID
 
 	runner, err := e.registry.Get("supervisor")
 	if err != nil {
-		step.Fail(err.Error())
+		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
 	}
 
 	input := &runtime.AgentTaskInput{
-		RunID:       run.ID,
+		RunID:       rc.run.ID,
 		AgentID:     agent.ID,
 		AgentRole:   "supervisor",
 		Instruction: fmt.Sprintf("为任务「%s」创建契约并分派执行者", task.Title),
@@ -222,11 +245,11 @@ func (e *Engine) runSupervisor(ctx context.Context, run *WorkflowRun, proj *mode
 
 	output, err := runner.Execute(input)
 	if err != nil {
-		step.Fail(err.Error())
+		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
 	}
 	if output.Status == runtime.OutputStatusFailed {
-		step.Fail(output.Error)
+		_ = e.workflow.FailStep(ctx, step, output.Error)
 		return fmt.Errorf("supervisor failed: %s", output.Error)
 	}
 
@@ -234,29 +257,33 @@ func (e *Engine) runSupervisor(ctx context.Context, run *WorkflowRun, proj *mode
 	e.processAssignmentActions(ctx, task.ID, agent.ID, output.Assignments)
 	e.processTransitionActions(ctx, task, output.Transitions)
 
-	step.Complete(output.Summary)
-	e.store.Save(run)
+	_ = e.workflow.CompleteStep(ctx, step, output.Summary)
 	return nil
 }
 
-func (e *Engine) runWorker(ctx context.Context, run *WorkflowRun, proj *model.Project, phase *model.Phase, task *model.Task) error {
-	step := run.AddStep(fmt.Sprintf("执行「%s」", task.Title), "worker")
-	step.Start()
-	step.TaskID = task.ID
+func (e *Engine) runWorker(ctx context.Context, rc *runCtx, proj *model.Project, phase *model.Phase, task *model.Task) error {
+	step, err := e.workflow.AddStep(ctx, rc.run.ID, fmt.Sprintf("执行「%s」", task.Title), "worker", rc.nextOrder())
+	if err != nil {
+		return err
+	}
+	if err := e.workflow.StartStep(ctx, step); err != nil {
+		return err
+	}
+	step.TaskID = &task.ID
 
 	agent, err := e.findAgent(ctx, model.AgentRoleWorker)
 	if err != nil {
-		step.Fail(err.Error())
+		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
 	}
-	step.AgentID = agent.ID
+	step.AgentID = &agent.ID
 
 	// Transition to in_progress
 	_ = e.services.Task.TransitionStatus(ctx, task.ID, model.TaskStatusInProgress)
 
 	runner, err := e.registry.Get("worker")
 	if err != nil {
-		step.Fail(err.Error())
+		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
 	}
 
@@ -270,7 +297,7 @@ func (e *Engine) runWorker(ctx context.Context, run *WorkflowRun, proj *model.Pr
 	}
 
 	input := &runtime.AgentTaskInput{
-		RunID:       run.ID,
+		RunID:       rc.run.ID,
 		AgentID:     agent.ID,
 		AgentRole:   "worker",
 		Instruction: fmt.Sprintf("执行任务「%s」并生成交付物", task.Title),
@@ -282,11 +309,11 @@ func (e *Engine) runWorker(ctx context.Context, run *WorkflowRun, proj *model.Pr
 
 	output, err := runner.Execute(input)
 	if err != nil {
-		step.Fail(err.Error())
+		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
 	}
 	if output.Status == runtime.OutputStatusFailed {
-		step.Fail(output.Error)
+		_ = e.workflow.FailStep(ctx, step, output.Error)
 		return fmt.Errorf("worker failed: %s", output.Error)
 	}
 
@@ -294,31 +321,35 @@ func (e *Engine) runWorker(ctx context.Context, run *WorkflowRun, proj *model.Pr
 	e.processHandoffActions(ctx, task.ID, agent.ID, output.Handoffs)
 	e.processTransitionActions(ctx, task, output.Transitions)
 
-	step.Complete(output.Summary)
-	e.store.Save(run)
+	_ = e.workflow.CompleteStep(ctx, step, output.Summary)
 	return nil
 }
 
-func (e *Engine) runReviewer(ctx context.Context, run *WorkflowRun, proj *model.Project, phase *model.Phase, task *model.Task) error {
-	step := run.AddStep(fmt.Sprintf("评审「%s」", task.Title), "reviewer")
-	step.Start()
-	step.TaskID = task.ID
+func (e *Engine) runReviewer(ctx context.Context, rc *runCtx, proj *model.Project, phase *model.Phase, task *model.Task) error {
+	step, err := e.workflow.AddStep(ctx, rc.run.ID, fmt.Sprintf("评审「%s」", task.Title), "reviewer", rc.nextOrder())
+	if err != nil {
+		return err
+	}
+	if err := e.workflow.StartStep(ctx, step); err != nil {
+		return err
+	}
+	step.TaskID = &task.ID
 
 	agent, err := e.findAgent(ctx, model.AgentRoleReviewer)
 	if err != nil {
-		step.Fail(err.Error())
+		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
 	}
-	step.AgentID = agent.ID
+	step.AgentID = &agent.ID
 
 	runner, err := e.registry.Get("reviewer")
 	if err != nil {
-		step.Fail(err.Error())
+		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
 	}
 
 	input := &runtime.AgentTaskInput{
-		RunID:       run.ID,
+		RunID:       rc.run.ID,
 		AgentID:     agent.ID,
 		AgentRole:   "reviewer",
 		Instruction: fmt.Sprintf("评审任务「%s」的交付物", task.Title),
@@ -328,18 +359,17 @@ func (e *Engine) runReviewer(ctx context.Context, run *WorkflowRun, proj *model.
 
 	output, err := runner.Execute(input)
 	if err != nil {
-		step.Fail(err.Error())
+		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
 	}
 	if output.Status == runtime.OutputStatusFailed {
-		step.Fail(output.Error)
+		_ = e.workflow.FailStep(ctx, step, output.Error)
 		return fmt.Errorf("reviewer failed: %s", output.Error)
 	}
 
 	e.processReviewActions(ctx, task.ID, agent.ID, output.Reviews)
 
-	step.Complete(output.Summary)
-	e.store.Save(run)
+	_ = e.workflow.CompleteStep(ctx, step, output.Summary)
 	return nil
 }
 
@@ -522,15 +552,13 @@ func (e *Engine) findAgent(ctx context.Context, role model.AgentRole) (*model.Ag
 	return nil, fmt.Errorf("no active agent with role %q found", role)
 }
 
-func (e *Engine) failRun(ctx context.Context, run *WorkflowRun, err error) {
-	now := time.Now()
-	run.Status = RunStatusFailed
-	run.Error = err.Error()
-	run.CompletedAt = &now
-	e.store.Save(run)
+func (e *Engine) failRun(ctx context.Context, rc *runCtx, err error) {
+	if fErr := e.workflow.FailRun(ctx, rc.run, err.Error()); fErr != nil {
+		e.logger.Error("fail run persistence error", "error", fErr)
+	}
 
 	e.services.Audit.LogEvent(ctx, "system", "", "workflow.failed",
 		fmt.Sprintf("工作流失败: %s", err.Error()),
-		"project", run.ProjectID, nil, map[string]string{"run_id": run.ID, "error": err.Error()})
+		"project", rc.run.ProjectID, nil, map[string]string{"run_id": rc.run.ID, "error": err.Error()})
 }
 
