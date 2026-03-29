@@ -168,8 +168,14 @@ func (g *Gateway) completeCall(ctx context.Context, call *model.ToolCall, status
 }
 
 // RegisterDefaults registers the built-in MVP tools.
-func (g *Gateway) RegisterDefaults() {
+// artifactTool should be created via NewArtifactStorageTool with proper config;
+// when nil a mock fallback is used.
+func (g *Gateway) RegisterDefaults(artifactTool *ArtifactStorageTool) {
 	g.RegisterTool(&DocGeneratorTool{})
-	g.RegisterTool(&ArtifactStorageTool{})
+	if artifactTool != nil {
+		g.RegisterTool(artifactTool)
+	} else {
+		g.RegisterTool(NewMockArtifactStorageTool())
+	}
 	g.RegisterTool(&TestRunnerTool{})
 }

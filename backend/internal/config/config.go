@@ -9,6 +9,7 @@ import (
 type Config struct {
 	Server   ServerConfig
 	Database DatabaseConfig
+	MinIO    MinIOConfig
 	APIKey   string
 }
 
@@ -24,6 +25,14 @@ type DatabaseConfig struct {
 	Password string
 	DBName   string
 	SSLMode  string
+}
+
+type MinIOConfig struct {
+	Endpoint  string
+	AccessKey string
+	SecretKey string
+	Bucket    string
+	UseSSL    bool
 }
 
 func (d DatabaseConfig) DSN() string {
@@ -47,6 +56,13 @@ func Load() *Config {
 			Password: getEnv("DB_PASSWORD", "lingchou"),
 			DBName:   getEnv("DB_NAME", "lingchou"),
 			SSLMode:  getEnv("DB_SSLMODE", "disable"),
+		},
+		MinIO: MinIOConfig{
+			Endpoint:  getEnv("MINIO_ENDPOINT", "localhost:9000"),
+			AccessKey: getEnv("MINIO_ACCESS_KEY", "lingchou"),
+			SecretKey: getEnv("MINIO_SECRET_KEY", "lingchou_minio_dev"),
+			Bucket:    getEnv("MINIO_BUCKET", "lingchou-artifacts"),
+			UseSSL:    getEnv("MINIO_USE_SSL", "false") == "true",
 		},
 	}
 }

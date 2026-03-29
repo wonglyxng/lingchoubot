@@ -90,7 +90,8 @@ func main() {
 
 	// --- tool gateway ---
 	gw := gateway.NewGateway(toolCallSvc, agentSvc, auditSvc, logger)
-	gw.RegisterDefaults()
+	artifactTool := gateway.NewArtifactStorageTool(cfg.MinIO, logger)
+	gw.RegisterDefaults(artifactTool)
 	handler.NewToolCallHandler(toolCallSvc, gw).Register(mux)
 
 	// --- agent runtime & orchestrator ---

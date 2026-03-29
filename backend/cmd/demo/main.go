@@ -413,14 +413,14 @@ func mustListItems(label, method, path string) []any {
 
 func mustCreateApproval(projID, taskID, requestedBy, approverID, taskTitle string) string {
 	body := map[string]any{
-		"project_id":   projID,
-		"task_id":      taskID,
-		"requested_by": requestedBy,
+		"project_id":    projID,
+		"task_id":       taskID,
+		"requested_by":  requestedBy,
 		"approver_type": "agent",
-		"approver_id":  approverID,
-		"title":        fmt.Sprintf("审批：任务「%s」交付验收", taskTitle),
-		"description":  fmt.Sprintf("请审批任务「%s」的交付物，评审已通过。", taskTitle),
-		"metadata":     map[string]any{},
+		"approver_id":   approverID,
+		"title":         fmt.Sprintf("审批：任务「%s」交付验收", taskTitle),
+		"description":   fmt.Sprintf("请审批任务「%s」的交付物，评审已通过。", taskTitle),
+		"metadata":      map[string]any{},
 	}
 	result, code := doRequest("POST", "/api/v1/approvals", body)
 	if code >= 400 {

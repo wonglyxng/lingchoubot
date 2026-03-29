@@ -15,6 +15,21 @@ services:
       timeout: 3s
       retries: 5
 
+  # S3 兼容对象存储：与 AGENTS.md / 架构文档中的「Docker Compose + MinIO」一致。
+  # 后端当前仍以 mock URI 为主，未强制依赖；后续工件实际上传时再接此端点。
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: lingchou
+      MINIO_ROOT_PASSWORD: lingchou_minio_dev
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # Web Console
+    volumes:
+      - miniodata:/data
+    # 官方镜像曾移除 curl，healthcheck 易在不同 tag 下失效；api 不依赖 minio 就绪顺序。
+
   migrate:
     build:
       context: ./backend
@@ -44,6 +59,11 @@ services:
       DB_PASSWORD: lingchou
       DB_NAME: lingchou
       DB_SSLMODE: disable
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: lingchou
+      MINIO_SECRET_KEY: lingchou_minio_dev
+      MINIO_BUCKET: lingchou-artifacts
+      MINIO_USE_SSL: "false"
     depends_on:
       postgres:
         condition: service_healthy
@@ -60,3 +80,4 @@ services:
 
 volumes:
   pgdata:
+  miniodata:
