@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lingchou/lingchoubot/backend/internal/config"
+	"github.com/lingchou/lingchoubot/backend/internal/gateway"
 	"github.com/lingchou/lingchoubot/backend/internal/handler"
 	"github.com/lingchou/lingchoubot/backend/internal/middleware"
 	"github.com/lingchou/lingchoubot/backend/internal/orchestrator"
@@ -45,6 +46,7 @@ func main() {
 	artifactVerRepo := repository.NewArtifactVersionRepo(db)
 	reviewRepo := repository.NewReviewReportRepo(db)
 	approvalRepo := repository.NewApprovalRequestRepo(db)
+	toolCallRepo := repository.NewToolCallRepo(db)
 
 	// --- services ---
 	auditSvc := service.NewAuditService(auditRepo, logger)
@@ -58,6 +60,7 @@ func main() {
 	artifactSvc := service.NewArtifactService(artifactRepo, artifactVerRepo, auditSvc)
 	reviewSvc := service.NewReviewReportService(reviewRepo, taskSvc, auditSvc)
 	approvalSvc := service.NewApprovalRequestService(approvalRepo, taskSvc, auditSvc)
+	toolCallSvc := service.NewToolCallService(toolCallRepo, auditSvc)
 
 	// --- handlers ---
 	mux := http.NewServeMux()
@@ -84,6 +87,11 @@ func main() {
 	handler.NewReviewReportHandler(reviewSvc).Register(mux)
 	handler.NewApprovalRequestHandler(approvalSvc).Register(mux)
 	handler.NewAuditHandler(auditSvc).Register(mux)
+
+	// --- tool gateway ---
+	gw := gateway.NewGateway(toolCallSvc, agentSvc, auditSvc, logger)
+	gw.RegisterDefaults()
+	handler.NewToolCallHandler(toolCallSvc, gw).Register(mux)
 
 	// --- agent runtime & orchestrator ---
 	reg := runtime.NewRegistry()
