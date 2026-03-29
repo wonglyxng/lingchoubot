@@ -1,12 +1,4 @@
-// 状态标签映射 — 与控制台展示一致
-
-export type StatusVariant =
-  | "default"
-  | "info"
-  | "success"
-  | "warning"
-  | "error"
-  | "muted";
+export type StatusVariant = "default" | "info" | "success" | "warning" | "error" | "muted";
 
 interface StatusDef {
   label: string;
@@ -14,19 +6,43 @@ interface StatusDef {
 }
 
 const taskStatusMap: Record<string, StatusDef> = {
-  PENDING: { label: "待处理", variant: "default" },
-  READY: { label: "就绪", variant: "info" },
-  RUNNING: { label: "运行中", variant: "info" },
-  WAITING_APPROVAL: { label: "待审批", variant: "warning" },
-  SUCCESS: { label: "已完成", variant: "success" },
-  FAILED: { label: "失败", variant: "error" },
-  CANCELLED: { label: "已取消", variant: "muted" },
+  pending:            { label: "待处理", variant: "default" },
+  assigned:           { label: "已分派", variant: "info" },
+  in_progress:        { label: "进行中", variant: "info" },
+  in_review:          { label: "评审中", variant: "warning" },
+  revision_required:  { label: "需修订", variant: "error" },
+  completed:          { label: "已完成", variant: "success" },
+  failed:             { label: "失败",   variant: "error" },
+  cancelled:          { label: "已取消", variant: "muted" },
+  blocked:            { label: "阻塞",   variant: "warning" },
 };
 
 const approvalStatusMap: Record<string, StatusDef> = {
-  PENDING: { label: "待处理", variant: "warning" },
-  APPROVED: { label: "已批准", variant: "success" },
-  REJECTED: { label: "已驳回", variant: "error" },
+  pending:  { label: "待审批", variant: "warning" },
+  approved: { label: "已批准", variant: "success" },
+  rejected: { label: "已拒绝", variant: "error" },
+};
+
+const projectStatusMap: Record<string, StatusDef> = {
+  planning:  { label: "规划中", variant: "default" },
+  active:    { label: "进行中", variant: "info" },
+  paused:    { label: "暂停",   variant: "warning" },
+  completed: { label: "已完成", variant: "success" },
+  cancelled: { label: "已取消", variant: "muted" },
+};
+
+const phaseStatusMap: Record<string, StatusDef> = {
+  pending:   { label: "待开始", variant: "default" },
+  active:    { label: "进行中", variant: "info" },
+  completed: { label: "已完成", variant: "success" },
+  skipped:   { label: "已跳过", variant: "muted" },
+};
+
+const agentRoleMap: Record<string, string> = {
+  pm:         "项目经理",
+  supervisor: "主管",
+  worker:     "执行者",
+  reviewer:   "评审者",
 };
 
 export function getTaskStatus(status: string): StatusDef {
@@ -37,13 +53,25 @@ export function getApprovalStatus(status: string): StatusDef {
   return approvalStatusMap[status] || { label: status, variant: "default" };
 }
 
+export function getProjectStatus(status: string): StatusDef {
+  return projectStatusMap[status] || { label: status, variant: "default" };
+}
+
+export function getPhaseStatus(status: string): StatusDef {
+  return phaseStatusMap[status] || { label: status, variant: "default" };
+}
+
+export function getAgentRole(role: string): string {
+  return agentRoleMap[role] || role;
+}
+
 const variantClasses: Record<StatusVariant, string> = {
   default: "bg-gray-100 text-gray-700",
-  info: "bg-blue-100 text-blue-700",
+  info:    "bg-blue-100 text-blue-700",
   success: "bg-green-100 text-green-700",
   warning: "bg-yellow-100 text-yellow-800",
-  error: "bg-red-100 text-red-700",
-  muted: "bg-gray-100 text-gray-400",
+  error:   "bg-red-100 text-red-700",
+  muted:   "bg-gray-100 text-gray-400",
 };
 
 export function getVariantClass(variant: StatusVariant): string {
@@ -54,12 +82,8 @@ export function formatTime(dateStr?: string): string {
   if (!dateStr) return "-";
   const d = new Date(dateStr);
   return d.toLocaleString("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
   });
 }
 
