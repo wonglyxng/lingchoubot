@@ -52,3 +52,11 @@ func (s *AuditService) LogEvent(ctx context.Context, actorType, actorID, eventTy
 func (s *AuditService) List(ctx context.Context, p repository.AuditListParams) ([]*model.AuditLog, int, error) {
 	return s.repo.List(ctx, p)
 }
+
+func (s *AuditService) ProjectTimeline(ctx context.Context, projectID string, limit, offset int) ([]*model.AuditLog, int, error) {
+	return s.repo.ProjectTimeline(ctx, projectID, limit, offset)
+}
+
+func (s *AuditService) TaskTimeline(ctx context.Context, taskID string, limit, offset int) ([]*model.AuditLog, int, error) {
+	return s.repo.TaskTimeline(ctx, taskID, limit, offset)
+}

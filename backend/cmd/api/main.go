@@ -36,6 +36,13 @@ func main() {
 	agentRepo := repository.NewAgentRepo(db)
 	taskRepo := repository.NewTaskRepo(db)
 	auditRepo := repository.NewAuditRepo(db)
+	contractRepo := repository.NewTaskContractRepo(db)
+	assignmentRepo := repository.NewTaskAssignmentRepo(db)
+	handoffRepo := repository.NewHandoffSnapshotRepo(db)
+	artifactRepo := repository.NewArtifactRepo(db)
+	artifactVerRepo := repository.NewArtifactVersionRepo(db)
+	reviewRepo := repository.NewReviewReportRepo(db)
+	approvalRepo := repository.NewApprovalRequestRepo(db)
 
 	// --- services ---
 	auditSvc := service.NewAuditService(auditRepo, logger)
@@ -43,6 +50,12 @@ func main() {
 	phaseSvc := service.NewPhaseService(phaseRepo, projectSvc, auditSvc)
 	agentSvc := service.NewAgentService(agentRepo, auditSvc)
 	taskSvc := service.NewTaskService(taskRepo, auditSvc)
+	contractSvc := service.NewTaskContractService(contractRepo, auditSvc)
+	assignmentSvc := service.NewTaskAssignmentService(assignmentRepo, auditSvc)
+	handoffSvc := service.NewHandoffSnapshotService(handoffRepo, auditSvc)
+	artifactSvc := service.NewArtifactService(artifactRepo, artifactVerRepo, auditSvc)
+	reviewSvc := service.NewReviewReportService(reviewRepo, taskSvc, auditSvc)
+	approvalSvc := service.NewApprovalRequestService(approvalRepo, taskSvc, auditSvc)
 
 	// --- handlers ---
 	mux := http.NewServeMux()
@@ -62,6 +75,12 @@ func main() {
 	handler.NewPhaseHandler(phaseSvc).Register(mux)
 	handler.NewAgentHandler(agentSvc).Register(mux)
 	handler.NewTaskHandler(taskSvc).Register(mux)
+	handler.NewTaskContractHandler(contractSvc).Register(mux)
+	handler.NewTaskAssignmentHandler(assignmentSvc).Register(mux)
+	handler.NewHandoffSnapshotHandler(handoffSvc).Register(mux)
+	handler.NewArtifactHandler(artifactSvc).Register(mux)
+	handler.NewReviewReportHandler(reviewSvc).Register(mux)
+	handler.NewApprovalRequestHandler(approvalSvc).Register(mux)
 	handler.NewAuditHandler(auditSvc).Register(mux)
 
 	// --- middleware chain ---

@@ -90,3 +90,79 @@ func (r *AgentRepo) Delete(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM agent WHERE id = $1`, id)
 	return err
 }
+
+// GetSubordinates returns all agents that directly report to the given agent.
+func (r *AgentRepo) GetSubordinates(ctx context.Context, agentID string) ([]*model.Agent, error) {
+	const q = `
+		SELECT id, name, role, description, reports_to, status, capabilities, metadata, created_at, updated_at
+		FROM agent WHERE reports_to = $1 ORDER BY created_at`
+	rows, err := r.db.QueryContext(ctx, q, agentID)
+	if err != nil {
+		return nil, fmt.Errorf("agent.GetSubordinates: %w", err)
+	}
+	defer rows.Close()
+
+	var list []*model.Agent
+	for rows.Next() {
+		a := &model.Agent{}
+		if err := rows.Scan(
+			&a.ID, &a.Name, &a.Role, &a.Description, &a.ReportsTo,
+			&a.Status, &a.Capabilities, &a.Metadata, &a.CreatedAt, &a.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("agent.GetSubordinates scan: %w", err)
+		}
+		list = append(list, a)
+	}
+	return list, rows.Err()
+}
+
+// GetOrgTree returns a flat list of all agents under the given root (recursive via CTE).
+// If rootID is empty, returns the full org tree.
+func (r *AgentRepo) GetOrgTree(ctx context.Context, rootID string) ([]*model.Agent, error) {
+	var q string
+	var args []interface{}
+
+	if rootID != "" {
+		q = `
+			WITH RECURSIVE tree AS (
+				SELECT id, name, role, description, reports_to, status, capabilities, metadata, created_at, updated_at, 0 AS depth
+				FROM agent WHERE id = $1
+				UNION ALL
+				SELECT a.id, a.name, a.role, a.description, a.reports_to, a.status, a.capabilities, a.metadata, a.created_at, a.updated_at, t.depth + 1
+				FROM agent a INNER JOIN tree t ON a.reports_to = t.id
+			)
+			SELECT id, name, role, description, reports_to, status, capabilities, metadata, created_at, updated_at
+			FROM tree ORDER BY depth, created_at`
+		args = []interface{}{rootID}
+	} else {
+		q = `
+			WITH RECURSIVE tree AS (
+				SELECT id, name, role, description, reports_to, status, capabilities, metadata, created_at, updated_at, 0 AS depth
+				FROM agent WHERE reports_to IS NULL
+				UNION ALL
+				SELECT a.id, a.name, a.role, a.description, a.reports_to, a.status, a.capabilities, a.metadata, a.created_at, a.updated_at, t.depth + 1
+				FROM agent a INNER JOIN tree t ON a.reports_to = t.id
+			)
+			SELECT id, name, role, description, reports_to, status, capabilities, metadata, created_at, updated_at
+			FROM tree ORDER BY depth, created_at`
+	}
+
+	rows, err := r.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("agent.GetOrgTree: %w", err)
+	}
+	defer rows.Close()
+
+	var list []*model.Agent
+	for rows.Next() {
+		a := &model.Agent{}
+		if err := rows.Scan(
+			&a.ID, &a.Name, &a.Role, &a.Description, &a.ReportsTo,
+			&a.Status, &a.Capabilities, &a.Metadata, &a.CreatedAt, &a.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("agent.GetOrgTree scan: %w", err)
+		}
+		list = append(list, a)
+	}
+	return list, rows.Err()
+}

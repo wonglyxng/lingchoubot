@@ -18,6 +18,8 @@ func NewAuditHandler(svc *service.AuditService) *AuditHandler {
 
 func (h *AuditHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/audit-logs", h.List)
+	mux.HandleFunc("GET /api/v1/projects/{projectId}/timeline", h.ProjectTimeline)
+	mux.HandleFunc("GET /api/v1/tasks/{taskId}/timeline", h.TaskTimeline)
 }
 
 func (h *AuditHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -30,6 +32,34 @@ func (h *AuditHandler) List(w http.ResponseWriter, r *http.Request) {
 		Offset:     offset,
 	}
 	list, total, err := h.svc.List(r.Context(), p)
+	if err != nil {
+		middleware.ErrorJSON(w, http.StatusInternalServerError, "QUERY_FAILED", err.Error())
+		return
+	}
+	middleware.JSON(w, http.StatusOK, map[string]interface{}{
+		"items": list,
+		"total": total,
+	})
+}
+
+func (h *AuditHandler) ProjectTimeline(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("projectId")
+	limit, offset := parsePagination(r)
+	list, total, err := h.svc.ProjectTimeline(r.Context(), projectID, limit, offset)
+	if err != nil {
+		middleware.ErrorJSON(w, http.StatusInternalServerError, "QUERY_FAILED", err.Error())
+		return
+	}
+	middleware.JSON(w, http.StatusOK, map[string]interface{}{
+		"items": list,
+		"total": total,
+	})
+}
+
+func (h *AuditHandler) TaskTimeline(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("taskId")
+	limit, offset := parsePagination(r)
+	list, total, err := h.svc.TaskTimeline(r.Context(), taskID, limit, offset)
 	if err != nil {
 		middleware.ErrorJSON(w, http.StatusInternalServerError, "QUERY_FAILED", err.Error())
 		return

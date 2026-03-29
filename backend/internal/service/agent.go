@@ -76,3 +76,12 @@ func (s *AgentService) Delete(ctx context.Context, id string) error {
 		"Agent 已删除", "agent", id, old, nil)
 	return nil
 }
+
+func (s *AgentService) GetSubordinates(ctx context.Context, agentID string) ([]*model.Agent, error) {
+	return s.repo.GetSubordinates(ctx, agentID)
+}
+
+// GetOrgTree returns a flat list ordered by depth. If rootID is empty, returns full tree.
+func (s *AgentService) GetOrgTree(ctx context.Context, rootID string) ([]*model.Agent, error) {
+	return s.repo.GetOrgTree(ctx, rootID)
+}
