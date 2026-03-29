@@ -13,7 +13,9 @@ import (
 	"github.com/lingchou/lingchoubot/backend/internal/config"
 	"github.com/lingchou/lingchoubot/backend/internal/handler"
 	"github.com/lingchou/lingchoubot/backend/internal/middleware"
+	"github.com/lingchou/lingchoubot/backend/internal/orchestrator"
 	"github.com/lingchou/lingchoubot/backend/internal/repository"
+	"github.com/lingchou/lingchoubot/backend/internal/runtime"
 	"github.com/lingchou/lingchoubot/backend/internal/service"
 )
 
@@ -82,6 +84,26 @@ func main() {
 	handler.NewReviewReportHandler(reviewSvc).Register(mux)
 	handler.NewApprovalRequestHandler(approvalSvc).Register(mux)
 	handler.NewAuditHandler(auditSvc).Register(mux)
+
+	// --- agent runtime & orchestrator ---
+	reg := runtime.NewRegistry()
+	reg.RegisterDefaults()
+
+	orchServices := &orchestrator.Services{
+		Project:    projectSvc,
+		Phase:      phaseSvc,
+		Agent:      agentSvc,
+		Task:       taskSvc,
+		Contract:   contractSvc,
+		Assignment: assignmentSvc,
+		Artifact:   artifactSvc,
+		Handoff:    handoffSvc,
+		Review:     reviewSvc,
+		Approval:   approvalSvc,
+		Audit:      auditSvc,
+	}
+	engine := orchestrator.NewEngine(reg, orchServices, orchestrator.NewRunStore(), logger)
+	handler.NewOrchestratorHandler(engine).Register(mux)
 
 	// --- middleware chain ---
 	var chain http.Handler = mux
