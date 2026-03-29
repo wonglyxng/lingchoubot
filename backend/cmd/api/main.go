@@ -115,6 +115,7 @@ func main() {
 
 	// --- middleware chain ---
 	var chain http.Handler = mux
+	chain = middleware.Auth(cfg.APIKey)(chain)
 	chain = middleware.CORS(chain)
 	chain = middleware.Logging(logger)(chain)
 	chain = middleware.Recovery(logger)(chain)

@@ -126,11 +126,20 @@ func (g *Gateway) checkPermission(ctx context.Context, agentID string, tool Tool
 		_ = json.Unmarshal([]byte(agent.Capabilities), &capabilities)
 	}
 
+	return matchCapabilities(capabilities, required)
+}
+
+// matchCapabilities checks whether the given capabilities satisfy all required permissions.
+// "tool.*" acts as a wildcard granting access to all tool permissions.
+func matchCapabilities(capabilities []string, required []string) error {
+	if len(required) == 0 {
+		return nil
+	}
+
 	capSet := make(map[string]bool)
 	for _, c := range capabilities {
 		capSet[c] = true
 	}
-	// "tool.*" grants access to all tools
 	if capSet["tool.*"] {
 		return nil
 	}

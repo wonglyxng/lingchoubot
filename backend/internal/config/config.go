@@ -9,6 +9,7 @@ import (
 type Config struct {
 	Server   ServerConfig
 	Database DatabaseConfig
+	APIKey   string
 }
 
 type ServerConfig struct {
@@ -34,6 +35,7 @@ func (d DatabaseConfig) DSN() string {
 
 func Load() *Config {
 	return &Config{
+		APIKey: getEnv("API_KEY", ""),
 		Server: ServerConfig{
 			Host: getEnv("SERVER_HOST", "0.0.0.0"),
 			Port: getEnvInt("SERVER_PORT", 8080),
