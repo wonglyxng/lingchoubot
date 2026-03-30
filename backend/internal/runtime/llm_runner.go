@@ -24,7 +24,7 @@ func NewLLMRunner(client *LLMClient, role, specialization string, logger *slog.L
 	}
 }
 
-func (r *LLMAgentRunner) Role() string          { return r.role }
+func (r *LLMAgentRunner) Role() string           { return r.role }
 func (r *LLMAgentRunner) Specialization() string { return r.spec }
 
 func (r *LLMAgentRunner) Execute(input *AgentTaskInput) (*AgentTaskOutput, error) {
@@ -85,15 +85,24 @@ func truncateStr(s string, max int) string {
 }
 
 // RegisterLLMRunners registers LLM-based runners for all roles into the given registry.
-// This replaces mock runners with real LLM-powered agents.
-func RegisterLLMRunners(reg *Registry, client *LLMClient, logger *slog.Logger) {
-	reg.Register("pm", NewLLMRunner(client, "pm", "", logger))
-	reg.Register("supervisor", NewLLMRunner(client, "supervisor", "", logger))
-	reg.Register("worker", NewLLMRunner(client, "worker", "general", logger))
-	reg.Register("reviewer", NewLLMRunner(client, "reviewer", "", logger))
+// Each role can have its own LLM config (model/base_url/api_key); unconfigured fields
+// fall back to the global defaults provided by defaultClient.
+func RegisterLLMRunners(reg *Registry, defaultClient *LLMClient, roleClients map[string]*LLMClient, logger *slog.Logger) {
+	getClient := func(role string) *LLMClient {
+		if c, ok := roleClients[role]; ok {
+			return c
+		}
+		return defaultClient
+	}
 
-	// Specialized workers
-	reg.RegisterSpecialized("worker", "backend", NewLLMRunner(client, "worker", "backend", logger))
-	reg.RegisterSpecialized("worker", "frontend", NewLLMRunner(client, "worker", "frontend", logger))
-	reg.RegisterSpecialized("worker", "qa", NewLLMRunner(client, "worker", "qa", logger))
+	reg.Register("pm", NewLLMRunner(getClient("pm"), "pm", "", logger))
+	reg.Register("supervisor", NewLLMRunner(getClient("supervisor"), "supervisor", "", logger))
+	reg.Register("worker", NewLLMRunner(getClient("worker"), "worker", "general", logger))
+	reg.Register("reviewer", NewLLMRunner(getClient("reviewer"), "reviewer", "", logger))
+
+	// Specialized workers share the worker client
+	wc := getClient("worker")
+	reg.RegisterSpecialized("worker", "backend", NewLLMRunner(wc, "worker", "backend", logger))
+	reg.RegisterSpecialized("worker", "frontend", NewLLMRunner(wc, "worker", "frontend", logger))
+	reg.RegisterSpecialized("worker", "qa", NewLLMRunner(wc, "worker", "qa", logger))
 }

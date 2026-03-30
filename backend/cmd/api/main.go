@@ -98,12 +98,27 @@ func main() {
 	reg := runtime.NewRegistry()
 
 	if cfg.LLM.Enabled && cfg.LLM.APIKey != "" {
-		llmClient := runtime.NewLLMClient(runtime.LLMClientConfig{
+		defaultClient := runtime.NewLLMClient(runtime.LLMClientConfig{
 			BaseURL: cfg.LLM.BaseURL,
 			APIKey:  cfg.LLM.APIKey,
 			Model:   cfg.LLM.Model,
 		})
-		runtime.RegisterLLMRunners(reg, llmClient, logger)
+
+		// 为有独立配置的角色创建专属 LLM 客户端
+		roleClients := make(map[string]*runtime.LLMClient)
+		for _, role := range []string{"pm", "supervisor", "worker", "reviewer"} {
+			baseURL, apiKey, model := cfg.LLM.ResolveForRole(role)
+			if baseURL != cfg.LLM.BaseURL || apiKey != cfg.LLM.APIKey || model != cfg.LLM.Model {
+				roleClients[role] = runtime.NewLLMClient(runtime.LLMClientConfig{
+					BaseURL: baseURL,
+					APIKey:  apiKey,
+					Model:   model,
+				})
+				logger.Info("role-specific LLM configured", "role", role, "model", model, "base_url", baseURL)
+			}
+		}
+
+		runtime.RegisterLLMRunners(reg, defaultClient, roleClients, logger)
 		logger.Info("LLM agent runners registered", "model", cfg.LLM.Model, "base_url", cfg.LLM.BaseURL)
 	} else {
 		reg.RegisterDefaults()

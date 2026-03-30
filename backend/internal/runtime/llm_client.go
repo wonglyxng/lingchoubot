@@ -44,10 +44,10 @@ type chatMessage struct {
 }
 
 type chatRequest struct {
-	Model          string         `json:"model"`
-	Messages       []chatMessage  `json:"messages"`
-	Temperature    float64        `json:"temperature"`
-	MaxTokens      int            `json:"max_tokens,omitempty"`
+	Model          string          `json:"model"`
+	Messages       []chatMessage   `json:"messages"`
+	Temperature    float64         `json:"temperature"`
+	MaxTokens      int             `json:"max_tokens,omitempty"`
 	ResponseFormat *responseFormat `json:"response_format,omitempty"`
 }
 
