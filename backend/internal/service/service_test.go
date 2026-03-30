@@ -487,3 +487,37 @@ func TestWorkflowServiceStepLifecycle(t *testing.T) {
 		t.Fatalf("expected step error %q, got %q", "fail", stepRepo.lastUpdatedStep.Error)
 	}
 }
+
+func TestWorkflowServiceGetRunLoadsSteps(t *testing.T) {
+	ctx := context.Background()
+	runRepo := &fakeWorkflowRunRepo{
+		runs: map[string]*model.WorkflowRun{
+			"run-1": {
+				ID:        "run-1",
+				ProjectID: "proj-1",
+				Status:    model.WorkflowRunCompleted,
+			},
+		},
+	}
+	stepRepo := &fakeWorkflowStepRepo{
+		steps: map[string]*model.WorkflowStep{
+			"step-1": {ID: "step-1", RunID: "run-1", Name: "PM 分解", AgentRole: "pm", Status: model.WorkflowStepCompleted, SortOrder: 1},
+			"step-2": {ID: "step-2", RunID: "run-1", Name: "Reviewer 评审", AgentRole: "reviewer", Status: model.WorkflowStepCompleted, SortOrder: 2},
+		},
+	}
+	svc := &WorkflowService{runRepo: runRepo, stepRepo: stepRepo}
+
+	run, err := svc.GetRun(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("GetRun returned error: %v", err)
+	}
+	if run == nil {
+		t.Fatal("expected run, got nil")
+	}
+	if len(run.Steps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(run.Steps))
+	}
+	if run.Steps[0].RunID != "run-1" || run.Steps[1].RunID != "run-1" {
+		t.Fatal("expected loaded steps to belong to run-1")
+	}
+}
