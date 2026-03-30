@@ -56,7 +56,7 @@ export default function ProjectDetailPage() {
       .then(([proj, ph, taskRes, artRes, auditRes]) => {
         if (cancelled) return;
         setProject(proj);
-        setPhases(ph);
+        setPhases(Array.isArray(ph) ? ph : []);
         setTasks(taskRes.items);
         setArtifacts(artRes.items);
         setTimeline(auditRes.items);

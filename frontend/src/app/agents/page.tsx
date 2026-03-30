@@ -104,7 +104,7 @@ export default function AgentsPage() {
     setError(null);
     api.agents
       .orgTree()
-      .then((list) => setItems(list))
+      .then((list) => setItems(Array.isArray(list) ? list : []))
       .catch((e: Error) => setError(e.message || "加载失败"))
       .finally(() => setLoading(false));
   }, []);
