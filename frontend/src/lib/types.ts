@@ -125,6 +125,49 @@ export interface ReviewReport {
   created_at: string;
 }
 
+export interface TaskContract {
+  id: string;
+  task_id: string;
+  version: number;
+  scope: string;
+  non_goals: string;
+  completion_definition: string;
+  acceptance_criteria: unknown;
+  constraints: unknown;
+  metadata: Record<string, unknown>;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskAssignment {
+  id: string;
+  task_id: string;
+  agent_id: string;
+  role: string;
+  status: string;
+  assigned_by?: string;
+  started_at?: string;
+  completed_at?: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HandoffSnapshot {
+  id: string;
+  task_id: string;
+  from_agent_id: string;
+  to_agent_id?: string;
+  completed_items: unknown;
+  pending_items: unknown;
+  risks: unknown;
+  next_steps: unknown;
+  context_summary: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface ToolCall {
   id: string;
   task_id?: string;

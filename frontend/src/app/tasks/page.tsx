@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useCallback } from "react";
+import Link from "next/link";
 import { ListChecks, Plus } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Task, Project } from "@/lib/types";
@@ -32,7 +33,7 @@ function priorityVariant(priority: number): StatusVariant {
 function TaskCard({ task }: { task: Task }) {
   const pv = priorityVariant(task.priority);
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
+    <Link href={`/tasks/${task.id}`} className="block rounded-lg border border-gray-200 bg-white p-3 shadow-sm transition-colors hover:border-blue-200 hover:bg-blue-50/40">
       <p className="text-sm font-medium text-gray-900 line-clamp-2">
         {task.title}
       </p>
@@ -42,7 +43,7 @@ function TaskCard({ task }: { task: Task }) {
       <p className="mt-2 text-xs text-gray-500">
         {relativeTime(task.created_at)}
       </p>
-    </div>
+    </Link>
   );
 }
 

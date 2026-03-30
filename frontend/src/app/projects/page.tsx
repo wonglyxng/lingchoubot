@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { FolderKanban, Plus } from "lucide-react";
+import { FolderKanban, Plus, Pencil, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Project } from "@/lib/types";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -22,6 +22,9 @@ export default function ProjectsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({ name: "", description: "" });
+
+  const [editTarget, setEditTarget] = useState<Project | null>(null);
+  const [editForm, setEditForm] = useState({ name: "", description: "" });
 
   const load = useCallback(() => {
     setLoading(true);
@@ -48,6 +51,35 @@ export default function ProjectsPage() {
       alert(msg);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const openEdit = (p: Project) => {
+    setEditTarget(p);
+    setEditForm({ name: p.name, description: p.description });
+  };
+
+  const handleEdit = async () => {
+    if (!editTarget || !editForm.name.trim()) return;
+    setSubmitting(true);
+    try {
+      await api.projects.update(editTarget.id, { name: editForm.name.trim(), description: editForm.description.trim() });
+      setEditTarget(null);
+      load();
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : "更新失败");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDelete = async (p: Project) => {
+    if (!confirm(`确定删除项目「${p.name}」？此操作不可撤销。`)) return;
+    try {
+      await api.projects.delete(p.id);
+      load();
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : "删除失败");
     }
   };
 
@@ -102,6 +134,33 @@ export default function ProjectsPage() {
         </FormField>
       </FormModal>
 
+      <FormModal
+        open={!!editTarget}
+        onClose={() => setEditTarget(null)}
+        title="编辑项目"
+        onSubmit={handleEdit}
+        submitting={submitting}
+      >
+        <FormField label="项目名称" required>
+          <input
+            className={inputClass}
+            value={editForm.name}
+            onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+            maxLength={200}
+            required
+          />
+        </FormField>
+        <FormField label="描述">
+          <textarea
+            className={textareaClass}
+            rows={3}
+            value={editForm.description}
+            onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
+            maxLength={2000}
+          />
+        </FormField>
+      </FormModal>
+
       {loading && (
         <div className="rounded-lg border border-gray-200 bg-white px-5 py-12 text-center text-sm text-gray-500">
           加载中…
@@ -125,7 +184,7 @@ export default function ProjectsPage() {
           {items.map((p) => {
             const st = getProjectStatus(p.status);
             return (
-              <li key={p.id}>
+              <li key={p.id} className="relative">
                 <Link
                   href={`/projects/${p.id}`}
                   className="block h-full rounded-lg border border-gray-200 bg-white p-4 shadow-sm transition-colors hover:border-blue-200 hover:bg-blue-50/40"
@@ -143,6 +202,22 @@ export default function ProjectsPage() {
                     创建于 {formatTime(p.created_at)}
                   </p>
                 </Link>
+                <div className="absolute right-2 top-2 flex gap-1">
+                  <button
+                    onClick={(e) => { e.preventDefault(); openEdit(p); }}
+                    className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                    title="编辑"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    onClick={(e) => { e.preventDefault(); handleDelete(p); }}
+                    className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600"
+                    title="删除"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               </li>
             );
           })}

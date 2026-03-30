@@ -3,10 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Artifact, AuditLog, Phase, Project, Task } from "@/lib/types";
 import { StatusBadge } from "@/components/StatusBadge";
+import { FormModal, FormField, inputClass, textareaClass } from "@/components/FormModal";
 import {
   formatTime,
   getPhaseStatus,
@@ -34,6 +35,41 @@ export default function ProjectDetailPage() {
     () => [...phases].sort((a, b) => a.sort_order - b.sort_order),
     [phases],
   );
+
+  const [showPhaseCreate, setShowPhaseCreate] = useState(false);
+  const [phaseForm, setPhaseForm] = useState({ name: "", description: "" });
+  const [phaseSubmitting, setPhaseSubmitting] = useState(false);
+
+  const handlePhaseCreate = async () => {
+    if (!phaseForm.name.trim() || !id) return;
+    setPhaseSubmitting(true);
+    try {
+      await api.phases.create({
+        project_id: id,
+        name: phaseForm.name.trim(),
+        description: phaseForm.description.trim(),
+        sort_order: phases.length + 1,
+      });
+      setShowPhaseCreate(false);
+      setPhaseForm({ name: "", description: "" });
+      const ph = await api.phases.listByProject(id);
+      setPhases(Array.isArray(ph) ? ph : []);
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : "创建阶段失败");
+    } finally {
+      setPhaseSubmitting(false);
+    }
+  };
+
+  const handlePhaseDelete = async (ph: Phase) => {
+    if (!confirm(`确定删除阶段「${ph.name}」？`)) return;
+    try {
+      await api.phases.delete(ph.id);
+      setPhases((prev) => prev.filter((p) => p.id !== ph.id));
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : "删除失败");
+    }
+  };
 
   useEffect(() => {
     if (!id) {
@@ -144,32 +180,63 @@ export default function ProjectDetailPage() {
 
           <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
             {tab === "phases" && (
-              <ul className="divide-y divide-gray-100">
-                {sortedPhases.length === 0 ? (
-                  <li className="py-6 text-center text-sm text-gray-500">
-                    暂无阶段
-                  </li>
-                ) : (
-                  sortedPhases.map((ph) => {
-                    const st = getPhaseStatus(ph.status);
-                    return (
-                      <li key={ph.id} className="py-4 first:pt-0 last:pb-0">
-                        <div className="flex flex-wrap items-start justify-between gap-2">
-                          <span className="font-medium text-gray-900">
-                            {ph.name}
-                          </span>
-                          <StatusBadge label={st.label} variant={st.variant} />
-                        </div>
-                        {ph.description ? (
-                          <p className="mt-1 text-sm text-gray-500">
-                            {ph.description}
-                          </p>
-                        ) : null}
-                      </li>
-                    );
-                  })
-                )}
-              </ul>
+              <>
+                <div className="mb-4 flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-700">{sortedPhases.length} 个阶段</span>
+                  <button
+                    type="button"
+                    onClick={() => setShowPhaseCreate(true)}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+                  >
+                    <Plus className="h-3.5 w-3.5" /> 新建阶段
+                  </button>
+                </div>
+                <FormModal
+                  open={showPhaseCreate}
+                  onClose={() => setShowPhaseCreate(false)}
+                  title="新建阶段"
+                  onSubmit={handlePhaseCreate}
+                  submitting={phaseSubmitting}
+                >
+                  <FormField label="阶段名称" required>
+                    <input className={inputClass} value={phaseForm.name} onChange={(e) => setPhaseForm((f) => ({ ...f, name: e.target.value }))} maxLength={200} required />
+                  </FormField>
+                  <FormField label="描述">
+                    <textarea className={textareaClass} rows={2} value={phaseForm.description} onChange={(e) => setPhaseForm((f) => ({ ...f, description: e.target.value }))} maxLength={2000} />
+                  </FormField>
+                </FormModal>
+                <ul className="divide-y divide-gray-100">
+                  {sortedPhases.length === 0 ? (
+                    <li className="py-6 text-center text-sm text-gray-500">
+                      暂无阶段
+                    </li>
+                  ) : (
+                    sortedPhases.map((ph) => {
+                      const st = getPhaseStatus(ph.status);
+                      return (
+                        <li key={ph.id} className="py-4 first:pt-0 last:pb-0">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <span className="font-medium text-gray-900">
+                              {ph.name}
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <StatusBadge label={st.label} variant={st.variant} />
+                              <button onClick={() => handlePhaseDelete(ph)} className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600" title="删除">
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                          {ph.description ? (
+                            <p className="mt-1 text-sm text-gray-500">
+                              {ph.description}
+                            </p>
+                          ) : null}
+                        </li>
+                      );
+                    })
+                  )}
+                </ul>
+              </>
             )}
 
             {tab === "tasks" && (

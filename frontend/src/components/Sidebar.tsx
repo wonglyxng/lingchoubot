@@ -11,6 +11,10 @@ import {
   ShieldCheck,
   ScrollText,
   Activity,
+  FileSearch,
+  ArrowRightLeft,
+  Wrench,
+  FileText,
 } from "lucide-react";
 
 const navItems = [
@@ -20,6 +24,10 @@ const navItems = [
   { href: "/agents", label: "Agent", icon: Bot },
   { href: "/workflows", label: "工作流", icon: Activity },
   { href: "/artifacts", label: "工件", icon: Package },
+  { href: "/reviews", label: "评审", icon: FileSearch },
+  { href: "/handoffs", label: "交接", icon: ArrowRightLeft },
+  { href: "/tool-calls", label: "工具调用", icon: Wrench },
+  { href: "/contracts", label: "任务契约", icon: FileText },
   { href: "/approvals", label: "审批", icon: ShieldCheck },
   { href: "/audit", label: "审计", icon: ScrollText },
 ];

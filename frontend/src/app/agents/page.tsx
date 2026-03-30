@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { Bot, ChevronRight, Plus } from "lucide-react";
+import { Bot, ChevronRight, Plus, Pencil, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Agent } from "@/lib/types";
 import { getAgentRole, getAgentType, getAgentSpec } from "@/lib/utils";
@@ -98,6 +98,11 @@ export default function AgentsPage() {
     name: "", role: "worker", description: "",
     agent_type: "mock", specialization: "general", reports_to: "",
   });
+  const [editTarget, setEditTarget] = useState<Agent | null>(null);
+  const [editForm, setEditForm] = useState({
+    name: "", role: "worker", description: "",
+    agent_type: "mock", specialization: "general", reports_to: "",
+  });
 
   const load = useCallback(() => {
     setLoading(true);
@@ -131,6 +136,46 @@ export default function AgentsPage() {
       alert(msg);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const openEdit = (a: Agent) => {
+    setEditTarget(a);
+    setEditForm({
+      name: a.name, role: a.role, description: a.description,
+      agent_type: a.agent_type, specialization: a.specialization,
+      reports_to: a.reports_to || "",
+    });
+  };
+
+  const handleEdit = async () => {
+    if (!editTarget || !editForm.name.trim()) return;
+    setSubmitting(true);
+    try {
+      await api.agents.update(editTarget.id, {
+        name: editForm.name.trim(),
+        role: editForm.role,
+        description: editForm.description.trim(),
+        agent_type: editForm.agent_type,
+        specialization: editForm.specialization,
+        reports_to: editForm.reports_to || undefined,
+      });
+      setEditTarget(null);
+      load();
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : "更新失败");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDelete = async (a: Agent) => {
+    if (!confirm(`确定删除 Agent「${a.name}」？`)) return;
+    try {
+      await api.agents.delete(a.id);
+      load();
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : "删除失败");
     }
   };
 
@@ -223,6 +268,47 @@ export default function AgentsPage() {
         </FormField>
       </FormModal>
 
+      <FormModal
+        open={!!editTarget}
+        onClose={() => setEditTarget(null)}
+        title="编辑 Agent"
+        onSubmit={handleEdit}
+        submitting={submitting}
+      >
+        <FormField label="名称" required>
+          <input className={inputClass} value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} maxLength={100} required />
+        </FormField>
+        <div className="grid grid-cols-2 gap-4">
+          <FormField label="角色" required>
+            <select className={selectClass} value={editForm.role} onChange={(e) => setEditForm((f) => ({ ...f, role: e.target.value }))}>
+              <option value="pm">项目经理</option><option value="supervisor">主管</option><option value="worker">执行者</option><option value="reviewer">评审者</option>
+            </select>
+          </FormField>
+          <FormField label="类型">
+            <select className={selectClass} value={editForm.agent_type} onChange={(e) => setEditForm((f) => ({ ...f, agent_type: e.target.value }))}>
+              <option value="mock">模拟</option><option value="llm">LLM</option><option value="human">人工</option>
+            </select>
+          </FormField>
+        </div>
+        <FormField label="专长">
+          <select className={selectClass} value={editForm.specialization} onChange={(e) => setEditForm((f) => ({ ...f, specialization: e.target.value }))}>
+            <option value="general">通用</option><option value="backend">后端</option><option value="frontend">前端</option>
+            <option value="qa">测试</option><option value="release">发布</option><option value="devops">运维</option><option value="design">设计</option>
+          </select>
+        </FormField>
+        <FormField label="上级">
+          <select className={selectClass} value={editForm.reports_to} onChange={(e) => setEditForm((f) => ({ ...f, reports_to: e.target.value }))}>
+            <option value="">无（顶层）</option>
+            {items.filter((a) => a.id !== editTarget?.id).map((a) => (
+              <option key={a.id} value={a.id}>{a.name} ({getAgentRole(a.role)})</option>
+            ))}
+          </select>
+        </FormField>
+        <FormField label="描述">
+          <textarea className={textareaClass} rows={2} value={editForm.description} onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))} maxLength={1000} />
+        </FormField>
+      </FormModal>
+
       {loading && (
         <div className="rounded-lg border border-gray-200 bg-white px-5 py-12 text-center text-sm text-gray-500">
           加载中…
@@ -280,6 +366,14 @@ export default function AgentsPage() {
                       )}
                       <span className="text-xs text-gray-500">
                         {agent.status}
+                      </span>
+                      <span className="ml-auto flex gap-1">
+                        <button onClick={() => openEdit(agent)} className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600" title="编辑">
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        <button onClick={() => handleDelete(agent)} className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600" title="删除">
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
                       </span>
                     </div>
                     {agent.description ? (
