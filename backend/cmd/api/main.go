@@ -96,7 +96,19 @@ func main() {
 
 	// --- agent runtime & orchestrator ---
 	reg := runtime.NewRegistry()
-	reg.RegisterDefaults()
+
+	if cfg.LLM.Enabled && cfg.LLM.APIKey != "" {
+		llmClient := runtime.NewLLMClient(runtime.LLMClientConfig{
+			BaseURL: cfg.LLM.BaseURL,
+			APIKey:  cfg.LLM.APIKey,
+			Model:   cfg.LLM.Model,
+		})
+		runtime.RegisterLLMRunners(reg, llmClient, logger)
+		logger.Info("LLM agent runners registered", "model", cfg.LLM.Model, "base_url", cfg.LLM.BaseURL)
+	} else {
+		reg.RegisterDefaults()
+		logger.Info("mock agent runners registered (set LLM_ENABLED=true to use LLM)")
+	}
 
 	workflowRunRepo := repository.NewWorkflowRunRepo(db)
 	workflowStepRepo := repository.NewWorkflowStepRepo(db)
@@ -115,8 +127,34 @@ func main() {
 		Approval:   approvalSvc,
 		Audit:      auditSvc,
 	}
-	engine := orchestrator.NewEngine(reg, orchServices, workflowSvc, logger)
-	handler.NewOrchestratorHandler(engine).Register(mux)
+
+	// Choose workflow engine: Temporal or local
+	var workflowEngine orchestrator.WorkflowEngine
+
+	if cfg.Temporal.Enabled {
+		temporalClient, err := orchestrator.StartTemporalWorker(
+			orchestrator.TemporalWorkerConfig{
+				HostPort:  cfg.Temporal.HostPort,
+				Namespace: cfg.Temporal.Namespace,
+				TaskQueue: cfg.Temporal.TaskQueue,
+			},
+			reg, orchServices, workflowSvc, logger,
+		)
+		if err != nil {
+			logger.Error("failed to start Temporal worker", "error", err)
+			os.Exit(1)
+		}
+		defer temporalClient.Close()
+
+		workflowEngine = orchestrator.NewTemporalEngine(temporalClient, cfg.Temporal.TaskQueue, workflowSvc, logger)
+		logger.Info("Temporal workflow engine active", "host_port", cfg.Temporal.HostPort)
+	} else {
+		engine := orchestrator.NewEngine(reg, orchServices, workflowSvc, logger)
+		workflowEngine = engine
+		logger.Info("local workflow engine active")
+	}
+
+	handler.NewOrchestratorHandler(workflowEngine).Register(mux)
 
 	// --- middleware chain ---
 	var chain http.Handler = mux

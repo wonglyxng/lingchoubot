@@ -64,6 +64,16 @@ services:
       MINIO_SECRET_KEY: lingchou_minio_dev
       MINIO_BUCKET: lingchou-artifacts
       MINIO_USE_SSL: "false"
+      # LLM 配置（设为 true 并提供 API Key 启用真实 LLM Agent）
+      LLM_ENABLED: "${LLM_ENABLED:-false}"
+      LLM_BASE_URL: "${LLM_BASE_URL:-https://api.openai.com/v1}"
+      LLM_API_KEY: "${LLM_API_KEY:-}"
+      LLM_MODEL: "${LLM_MODEL:-gpt-4o-mini}"
+      # Temporal 配置（设为 true 启用 Temporal 编排）
+      TEMPORAL_ENABLED: "${TEMPORAL_ENABLED:-false}"
+      TEMPORAL_HOST_PORT: "temporal:7233"
+      TEMPORAL_NAMESPACE: "default"
+      TEMPORAL_TASK_QUEUE: "lingchou-orchestrator"
     depends_on:
       postgres:
         condition: service_healthy
@@ -77,6 +87,34 @@ services:
       - "3000:3000"
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:8080
+
+  # Temporal 工作流引擎（TEMPORAL_ENABLED=true 时 api 服务连接此实例）
+  temporal:
+    image: temporalio/auto-setup:1.25
+    ports:
+      - "7233:7233"   # gRPC
+    environment:
+      DB: postgresql
+      DB_PORT: 5432
+      POSTGRES_USER: lingchou
+      POSTGRES_PWD: lingchou
+      POSTGRES_SEEDS: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - temporal   # 仅 docker compose --profile temporal up 时启动
+
+  temporal-ui:
+    image: temporalio/ui:2.31.2
+    ports:
+      - "8088:8080"
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    depends_on:
+      - temporal
+    profiles:
+      - temporal
 
 volumes:
   pgdata:

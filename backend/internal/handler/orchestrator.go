@@ -11,10 +11,10 @@ import (
 )
 
 type OrchestratorHandler struct {
-	engine *orchestrator.Engine
+	engine orchestrator.WorkflowEngine
 }
 
-func NewOrchestratorHandler(engine *orchestrator.Engine) *OrchestratorHandler {
+func NewOrchestratorHandler(engine orchestrator.WorkflowEngine) *OrchestratorHandler {
 	return &OrchestratorHandler{engine: engine}
 }
 

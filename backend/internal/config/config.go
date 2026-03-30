@@ -10,7 +10,23 @@ type Config struct {
 	Server   ServerConfig
 	Database DatabaseConfig
 	MinIO    MinIOConfig
+	LLM      LLMConfig
+	Temporal TemporalConfig
 	APIKey   string
+}
+
+type LLMConfig struct {
+	Enabled bool
+	BaseURL string
+	APIKey  string
+	Model   string
+}
+
+type TemporalConfig struct {
+	Enabled   bool
+	HostPort  string
+	Namespace string
+	TaskQueue string
 }
 
 type ServerConfig struct {
@@ -63,6 +79,18 @@ func Load() *Config {
 			SecretKey: getEnv("MINIO_SECRET_KEY", "lingchou_minio_dev"),
 			Bucket:    getEnv("MINIO_BUCKET", "lingchou-artifacts"),
 			UseSSL:    getEnv("MINIO_USE_SSL", "false") == "true",
+		},
+		LLM: LLMConfig{
+			Enabled: getEnv("LLM_ENABLED", "false") == "true",
+			BaseURL: getEnv("LLM_BASE_URL", "https://api.openai.com/v1"),
+			APIKey:  getEnv("LLM_API_KEY", ""),
+			Model:   getEnv("LLM_MODEL", "gpt-4o-mini"),
+		},
+		Temporal: TemporalConfig{
+			Enabled:   getEnv("TEMPORAL_ENABLED", "false") == "true",
+			HostPort:  getEnv("TEMPORAL_HOST_PORT", "localhost:7233"),
+			Namespace: getEnv("TEMPORAL_NAMESPACE", "default"),
+			TaskQueue: getEnv("TEMPORAL_TASK_QUEUE", "lingchou-orchestrator"),
 		},
 	}
 }
