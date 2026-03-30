@@ -89,7 +89,7 @@ func main() {
 	handler.NewAuditHandler(auditSvc).Register(mux)
 
 	// --- tool gateway ---
-	gw := gateway.NewGateway(toolCallSvc, agentSvc, auditSvc, logger)
+	gw := gateway.NewGateway(toolCallSvc, agentSvc, contractSvc, auditSvc, logger)
 	artifactTool := gateway.NewArtifactStorageTool(cfg.MinIO, logger)
 	gw.RegisterDefaults(artifactTool)
 	handler.NewToolCallHandler(toolCallSvc, gw).Register(mux)

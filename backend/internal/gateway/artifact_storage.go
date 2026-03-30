@@ -65,6 +65,23 @@ func (t *ArtifactStorageTool) RequiredPermissions() []string {
 	return []string{"tool.artifact_storage"}
 }
 
+// Actions returns the available actions for the artifact storage tool.
+func (t *ArtifactStorageTool) Actions() []string {
+	return []string{"read", "write", "delete"}
+}
+
+// RiskLevel returns the risk level per action.
+func (t *ArtifactStorageTool) RiskLevel(action string) RiskLevel {
+	switch action {
+	case "delete":
+		return RiskCritical
+	case "write":
+		return RiskNormal
+	default:
+		return RiskNormal
+	}
+}
+
 func (t *ArtifactStorageTool) Execute(ctx context.Context, input map[string]any) (*ToolResult, error) {
 	name, _ := input["name"].(string)
 	content, _ := input["content"].(string)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/lingchou/lingchoubot/backend/internal/model"
@@ -14,20 +15,22 @@ import (
 // Gateway is the central dispatcher for all tool calls.
 // It handles permission checking, execution, recording, and auditing.
 type Gateway struct {
-	tools    map[string]Tool
-	callSvc  *service.ToolCallService
-	agentSvc *service.AgentService
-	auditSvc *service.AuditService
-	logger   *slog.Logger
+	tools       map[string]Tool
+	callSvc     *service.ToolCallService
+	agentSvc    *service.AgentService
+	contractSvc *service.TaskContractService
+	auditSvc    *service.AuditService
+	logger      *slog.Logger
 }
 
-func NewGateway(callSvc *service.ToolCallService, agentSvc *service.AgentService, auditSvc *service.AuditService, logger *slog.Logger) *Gateway {
+func NewGateway(callSvc *service.ToolCallService, agentSvc *service.AgentService, contractSvc *service.TaskContractService, auditSvc *service.AuditService, logger *slog.Logger) *Gateway {
 	return &Gateway{
-		tools:    make(map[string]Tool),
-		callSvc:  callSvc,
-		agentSvc: agentSvc,
-		auditSvc: auditSvc,
-		logger:   logger,
+		tools:       make(map[string]Tool),
+		callSvc:     callSvc,
+		agentSvc:    agentSvc,
+		contractSvc: contractSvc,
+		auditSvc:    auditSvc,
+		logger:      logger,
 	}
 }
 
@@ -38,17 +41,22 @@ func (g *Gateway) RegisterTool(tool Tool) {
 func (g *Gateway) ListTools() []ToolInfo {
 	list := make([]ToolInfo, 0, len(g.tools))
 	for _, t := range g.tools {
-		list = append(list, ToolInfo{
+		info := ToolInfo{
 			Name:                t.Name(),
 			Description:         t.Description(),
 			RequiredPermissions: t.RequiredPermissions(),
-		})
+			RiskLevel:           RiskNormal,
+		}
+		if at, ok := t.(ActionAwareTool); ok {
+			info.Actions = at.Actions()
+		}
+		list = append(list, info)
 	}
 	return list
 }
 
 // Execute dispatches a tool request through the gateway.
-// It validates permissions, records the call, executes the tool, and audits the result.
+// Permission checking order: (1) agent capabilities (2) task contract tool_permissions (3) risk level.
 func (g *Gateway) Execute(ctx context.Context, req *ToolRequest) (*ToolResult, error) {
 	tool, ok := g.tools[req.ToolName]
 	if !ok {
@@ -65,6 +73,7 @@ func (g *Gateway) Execute(ctx context.Context, req *ToolRequest) (*ToolResult, e
 		TaskID:   taskID,
 		AgentID:  req.AgentID,
 		ToolName: req.ToolName,
+		Action:   req.Action,
 		Input:    model.JSON(inputBytes),
 		Status:   model.ToolCallStatusRunning,
 	}
@@ -72,14 +81,40 @@ func (g *Gateway) Execute(ctx context.Context, req *ToolRequest) (*ToolResult, e
 		return nil, fmt.Errorf("record tool call: %w", err)
 	}
 
-	if err := g.checkPermission(ctx, req.AgentID, tool); err != nil {
-		g.completeCall(ctx, call, model.ToolCallStatusDenied, nil, err.Error(), 0)
-		g.auditSvc.LogEvent(ctx, "agent", req.AgentID, "tool_call.denied",
-			fmt.Sprintf("工具「%s」调用被拒绝: %s", req.ToolName, err.Error()),
-			"tool_call", call.ID, nil, call)
-		return &ToolResult{Status: "denied", Error: err.Error()}, nil
+	// --- Step 1: Check agent-level capabilities ---
+	if err := g.checkAgentPermission(ctx, req.AgentID, tool, req.Action); err != nil {
+		reason := fmt.Sprintf("agent capability denied: %s", err.Error())
+		g.denyCall(ctx, call, req.AgentID, reason)
+		return &ToolResult{Status: "denied", Error: reason}, nil
 	}
 
+	// --- Step 2: Check task contract tool_permissions (when task context exists) ---
+	if req.TaskID != "" {
+		if err := g.checkContractPermission(ctx, req.TaskID, req.ToolName); err != nil {
+			reason := fmt.Sprintf("contract denied: %s", err.Error())
+			g.denyCall(ctx, call, req.AgentID, reason)
+			return &ToolResult{Status: "denied", Error: reason}, nil
+		}
+	}
+
+	// --- Step 3: Check risk level ---
+	if at, ok := tool.(ActionAwareTool); ok {
+		risk := at.RiskLevel(req.Action)
+		if risk == RiskCritical {
+			reason := fmt.Sprintf("tool %s action %q is critical and requires approval", req.ToolName, req.Action)
+			g.escalateCall(ctx, call, req.AgentID, reason)
+			return &ToolResult{Status: "escalated", Error: reason}, nil
+		}
+		if risk == RiskSensitive {
+			if !g.hasElevatedPermission(ctx, req.AgentID, req.ToolName) {
+				reason := fmt.Sprintf("tool %s action %q is sensitive; requires elevated permission", req.ToolName, req.Action)
+				g.denyCall(ctx, call, req.AgentID, reason)
+				return &ToolResult{Status: "denied", Error: reason}, nil
+			}
+		}
+	}
+
+	// --- Execute tool ---
 	start := time.Now()
 	result, execErr := tool.Execute(ctx, req.Input)
 	durationMs := int(time.Since(start).Milliseconds())
@@ -104,7 +139,8 @@ func (g *Gateway) Execute(ctx context.Context, req *ToolRequest) (*ToolResult, e
 	return result, nil
 }
 
-func (g *Gateway) checkPermission(ctx context.Context, agentID string, tool Tool) error {
+// checkAgentPermission validates the agent has the required capabilities for this tool + action.
+func (g *Gateway) checkAgentPermission(ctx context.Context, agentID string, tool Tool, action string) error {
 	agent, err := g.agentSvc.GetByID(ctx, agentID)
 	if err != nil {
 		return fmt.Errorf("agent lookup failed: %w", err)
@@ -117,7 +153,7 @@ func (g *Gateway) checkPermission(ctx context.Context, agentID string, tool Tool
 	}
 
 	required := tool.RequiredPermissions()
-	if len(required) == 0 {
+	if len(required) == 0 && action == "" {
 		return nil
 	}
 
@@ -126,11 +162,102 @@ func (g *Gateway) checkPermission(ctx context.Context, agentID string, tool Tool
 		_ = json.Unmarshal([]byte(agent.Capabilities), &capabilities)
 	}
 
-	return matchCapabilities(capabilities, required)
+	if err := matchCapabilities(capabilities, required); err != nil {
+		return err
+	}
+
+	// Action-level check: if action is specified and tool supports actions, check tool.<name>:<action>
+	if action != "" {
+		if _, ok := tool.(ActionAwareTool); ok {
+			actionPerm := fmt.Sprintf("tool.%s:%s", tool.Name(), action)
+			if err := matchActionPermission(capabilities, tool.Name(), actionPerm); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// checkContractPermission validates the tool is allowed by the task contract.
+func (g *Gateway) checkContractPermission(ctx context.Context, taskID string, toolName string) error {
+	contract, err := g.contractSvc.GetLatestByTaskID(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("contract lookup failed: %w", err)
+	}
+	if contract == nil {
+		// No contract = no restriction
+		return nil
+	}
+
+	var allowedTools []string
+	if len(contract.ToolPermissions) > 0 {
+		_ = json.Unmarshal([]byte(contract.ToolPermissions), &allowedTools)
+	}
+	if len(allowedTools) == 0 {
+		// Empty permission list = no restriction
+		return nil
+	}
+
+	toolPerm := "tool." + toolName
+	for _, allowed := range allowedTools {
+		if allowed == "tool.*" || allowed == toolPerm {
+			return nil
+		}
+		// support prefix wildcard: "tool.artifact_storage:*" allows all actions
+		if strings.HasPrefix(allowed, toolPerm+":") || strings.HasPrefix(allowed, toolPerm) {
+			return nil
+		}
+	}
+	return fmt.Errorf("tool %q not permitted by task contract", toolName)
+}
+
+// hasElevatedPermission checks if the agent has explicit elevated access to a sensitive tool.
+func (g *Gateway) hasElevatedPermission(ctx context.Context, agentID string, toolName string) bool {
+	agent, err := g.agentSvc.GetByID(ctx, agentID)
+	if err != nil || agent == nil {
+		return false
+	}
+	var capabilities []string
+	if len(agent.Capabilities) > 0 {
+		_ = json.Unmarshal([]byte(agent.Capabilities), &capabilities)
+	}
+	elevated := fmt.Sprintf("tool.%s.elevated", toolName)
+	for _, c := range capabilities {
+		if c == elevated || c == "tool.*" {
+			return true
+		}
+	}
+	return false
+}
+
+// denyCall records a denied tool call with reason and audit event.
+func (g *Gateway) denyCall(ctx context.Context, call *model.ToolCall, agentID, reason string) {
+	call.Status = model.ToolCallStatusDenied
+	call.DeniedReason = reason
+	if err := g.callSvc.UpdateDenied(ctx, call.ID, reason); err != nil {
+		g.logger.Error("update denied tool call failed", "id", call.ID, "error", err)
+	}
+	g.auditSvc.LogEvent(ctx, "agent", agentID, "tool_call.denied",
+		fmt.Sprintf("工具「%s」调用被拒绝: %s", call.ToolName, reason),
+		"tool_call", call.ID, nil, call)
+}
+
+// escalateCall records an escalated tool call (critical risk) with audit event.
+func (g *Gateway) escalateCall(ctx context.Context, call *model.ToolCall, agentID, reason string) {
+	call.Status = model.ToolCallStatusEscalated
+	call.DeniedReason = reason
+	outputBytes, _ := json.Marshal(map[string]string{"escalation_reason": reason})
+	if err := g.callSvc.Complete(ctx, call.ID, model.ToolCallStatusEscalated, model.JSON(outputBytes), reason, 0); err != nil {
+		g.logger.Error("update escalated tool call failed", "id", call.ID, "error", err)
+	}
+	g.auditSvc.LogEvent(ctx, "agent", agentID, "tool_call.escalated",
+		fmt.Sprintf("工具「%s」调用需要审批: %s", call.ToolName, reason),
+		"tool_call", call.ID, nil, call)
 }
 
 // matchCapabilities checks whether the given capabilities satisfy all required permissions.
-// "tool.*" acts as a wildcard granting access to all tool permissions.
+// Supports wildcards: "tool.*" grants all tool permissions.
 func matchCapabilities(capabilities []string, required []string) error {
 	if len(required) == 0 {
 		return nil
@@ -150,6 +277,30 @@ func matchCapabilities(capabilities []string, required []string) error {
 		}
 	}
 	return nil
+}
+
+// matchActionPermission checks if the agent has permission for a specific tool action.
+// Permission hierarchy:
+//   - "tool.*" grants everything
+//   - "tool.<name>" grants all actions on that tool
+//   - "tool.<name>:*" grants all actions on that tool
+//   - "tool.<name>:<action>" grants specific action
+func matchActionPermission(capabilities []string, toolName string, actionPerm string) error {
+	for _, c := range capabilities {
+		if c == "tool.*" {
+			return nil
+		}
+		if c == "tool."+toolName {
+			return nil
+		}
+		if c == "tool."+toolName+":*" {
+			return nil
+		}
+		if c == actionPerm {
+			return nil
+		}
+	}
+	return fmt.Errorf("agent lacks action permission: %s", actionPerm)
 }
 
 func (g *Gateway) completeCall(ctx context.Context, call *model.ToolCall, status model.ToolCallStatus, output map[string]any, errMsg string, durationMs int) {

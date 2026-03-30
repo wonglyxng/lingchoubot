@@ -85,9 +85,9 @@ type AgentTaskOutput struct {
 type OutputStatus string
 
 const (
-	OutputStatusSuccess      OutputStatus = "success"
-	OutputStatusFailed       OutputStatus = "failed"
-	OutputStatusNeedsReview  OutputStatus = "needs_review"
+	OutputStatusSuccess       OutputStatus = "success"
+	OutputStatusFailed        OutputStatus = "failed"
+	OutputStatusNeedsReview   OutputStatus = "needs_review"
 	OutputStatusNeedsRevision OutputStatus = "needs_revision"
 )
 

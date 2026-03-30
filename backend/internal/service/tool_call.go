@@ -50,3 +50,7 @@ func (s *ToolCallService) List(ctx context.Context, p repository.ToolCallListPar
 func (s *ToolCallService) Complete(ctx context.Context, id string, status model.ToolCallStatus, output model.JSON, errMsg string, durationMs int) error {
 	return s.repo.Complete(ctx, id, status, output, errMsg, durationMs)
 }
+
+func (s *ToolCallService) UpdateDenied(ctx context.Context, id string, reason string) error {
+	return s.repo.UpdateDenied(ctx, id, reason)
+}

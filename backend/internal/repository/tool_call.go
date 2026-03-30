@@ -18,24 +18,24 @@ func NewToolCallRepo(db *sql.DB) *ToolCallRepo {
 
 func (r *ToolCallRepo) Create(ctx context.Context, tc *model.ToolCall) error {
 	const q = `
-		INSERT INTO tool_call (task_id, agent_id, tool_name, input, output, status, error_message, duration_ms, metadata)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO tool_call (task_id, agent_id, tool_name, action, input, output, status, error_message, denied_reason, duration_ms, metadata)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id, created_at`
 	return r.db.QueryRowContext(ctx, q,
-		tc.TaskID, tc.AgentID, tc.ToolName, tc.Input, tc.Output,
-		tc.Status, tc.ErrorMessage, tc.DurationMs, tc.Metadata,
+		tc.TaskID, tc.AgentID, tc.ToolName, tc.Action, tc.Input, tc.Output,
+		tc.Status, tc.ErrorMessage, tc.DeniedReason, tc.DurationMs, tc.Metadata,
 	).Scan(&tc.ID, &tc.CreatedAt)
 }
 
 func (r *ToolCallRepo) GetByID(ctx context.Context, id string) (*model.ToolCall, error) {
 	const q = `
-		SELECT id, task_id, agent_id, tool_name, input, output,
-		       status, error_message, duration_ms, metadata, created_at, completed_at
+		SELECT id, task_id, agent_id, tool_name, action, input, output,
+		       status, error_message, denied_reason, duration_ms, metadata, created_at, completed_at
 		FROM tool_call WHERE id = $1`
 	tc := &model.ToolCall{}
 	err := r.db.QueryRowContext(ctx, q, id).Scan(
-		&tc.ID, &tc.TaskID, &tc.AgentID, &tc.ToolName, &tc.Input, &tc.Output,
-		&tc.Status, &tc.ErrorMessage, &tc.DurationMs, &tc.Metadata, &tc.CreatedAt, &tc.CompletedAt,
+		&tc.ID, &tc.TaskID, &tc.AgentID, &tc.ToolName, &tc.Action, &tc.Input, &tc.Output,
+		&tc.Status, &tc.ErrorMessage, &tc.DeniedReason, &tc.DurationMs, &tc.Metadata, &tc.CreatedAt, &tc.CompletedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -88,8 +88,8 @@ func (r *ToolCallRepo) List(ctx context.Context, p ToolCallListParams) ([]*model
 	}
 
 	q := fmt.Sprintf(`
-		SELECT id, task_id, agent_id, tool_name, input, output,
-		       status, error_message, duration_ms, metadata, created_at, completed_at
+		SELECT id, task_id, agent_id, tool_name, action, input, output,
+		       status, error_message, denied_reason, duration_ms, metadata, created_at, completed_at
 		FROM tool_call %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`,
 		where, idx, idx+1)
 	args = append(args, p.Limit, p.Offset)
@@ -104,8 +104,8 @@ func (r *ToolCallRepo) List(ctx context.Context, p ToolCallListParams) ([]*model
 	for rows.Next() {
 		tc := &model.ToolCall{}
 		if err := rows.Scan(
-			&tc.ID, &tc.TaskID, &tc.AgentID, &tc.ToolName, &tc.Input, &tc.Output,
-			&tc.Status, &tc.ErrorMessage, &tc.DurationMs, &tc.Metadata, &tc.CreatedAt, &tc.CompletedAt,
+			&tc.ID, &tc.TaskID, &tc.AgentID, &tc.ToolName, &tc.Action, &tc.Input, &tc.Output,
+			&tc.Status, &tc.ErrorMessage, &tc.DeniedReason, &tc.DurationMs, &tc.Metadata, &tc.CreatedAt, &tc.CompletedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("tool_call.List scan: %w", err)
 		}
@@ -127,6 +127,23 @@ func (r *ToolCallRepo) Complete(ctx context.Context, id string, status model.Too
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		return fmt.Errorf("tool_call.Complete: not found")
+	}
+	return nil
+}
+
+// UpdateDenied updates a tool call with denied status and reason.
+func (r *ToolCallRepo) UpdateDenied(ctx context.Context, id string, reason string) error {
+	const q = `
+		UPDATE tool_call
+		SET status = 'denied', denied_reason = $2, completed_at = now()
+		WHERE id = $1`
+	res, err := r.db.ExecContext(ctx, q, id, reason)
+	if err != nil {
+		return fmt.Errorf("tool_call.UpdateDenied: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("tool_call.UpdateDenied: not found")
 	}
 	return nil
 }
