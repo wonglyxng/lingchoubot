@@ -57,8 +57,10 @@ func NewArtifactStorageTool(cfg config.MinIOConfig, logger *slog.Logger) *Artifa
 	return t
 }
 
-func (t *ArtifactStorageTool) Name() string        { return "artifact_storage" }
-func (t *ArtifactStorageTool) Description() string  { return "将工件内容存储到 MinIO 对象存储" }
+func (t *ArtifactStorageTool) Name() string { return "artifact_storage" }
+func (t *ArtifactStorageTool) Description() string {
+	return "将工件内容存储到 MinIO 对象存储"
+}
 func (t *ArtifactStorageTool) RequiredPermissions() []string {
 	return []string{"tool.artifact_storage"}
 }

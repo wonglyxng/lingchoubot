@@ -7,6 +7,13 @@ type AgentRunner interface {
 	Role() string
 }
 
+// SpecializedRunner extends AgentRunner with a Specialization method.
+// Runners that implement this interface can be routed by specialization.
+type SpecializedRunner interface {
+	AgentRunner
+	Specialization() string
+}
+
 // AgentTaskInput packages everything an agent needs to execute its work.
 type AgentTaskInput struct {
 	RunID       string         `json:"run_id"`

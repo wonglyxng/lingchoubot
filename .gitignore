@@ -4,6 +4,7 @@ backend/api.exe
 backend/migrate
 backend/migrate.exe
 *.test
+*.exe
 
 # Node
 frontend/node_modules/

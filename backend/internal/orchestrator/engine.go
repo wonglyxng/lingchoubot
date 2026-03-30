@@ -14,17 +14,17 @@ import (
 
 // Services bundles all the service dependencies the engine needs.
 type Services struct {
-	Project      *service.ProjectService
-	Phase        *service.PhaseService
-	Agent        *service.AgentService
-	Task         *service.TaskService
-	Contract     *service.TaskContractService
-	Assignment   *service.TaskAssignmentService
-	Artifact     *service.ArtifactService
-	Handoff      *service.HandoffSnapshotService
-	Review       *service.ReviewReportService
-	Approval     *service.ApprovalRequestService
-	Audit        *service.AuditService
+	Project    *service.ProjectService
+	Phase      *service.PhaseService
+	Agent      *service.AgentService
+	Task       *service.TaskService
+	Contract   *service.TaskContractService
+	Assignment *service.TaskAssignmentService
+	Artifact   *service.ArtifactService
+	Handoff    *service.HandoffSnapshotService
+	Review     *service.ReviewReportService
+	Approval   *service.ApprovalRequestService
+	Audit      *service.AuditService
 }
 
 // runCtx holds per-execution state during a workflow run.
@@ -262,7 +262,13 @@ func (e *Engine) runSupervisor(ctx context.Context, rc *runCtx, proj *model.Proj
 }
 
 func (e *Engine) runWorker(ctx context.Context, rc *runCtx, proj *model.Project, phase *model.Phase, task *model.Task) error {
-	step, err := e.workflow.AddStep(ctx, rc.run.ID, fmt.Sprintf("执行「%s」", task.Title), "worker", rc.nextOrder())
+	spec := inferSpecialization(task)
+	stepName := fmt.Sprintf("执行「%s」", task.Title)
+	if spec != model.AgentSpecGeneral {
+		stepName = fmt.Sprintf("执行「%s」(%s)", task.Title, spec)
+	}
+
+	step, err := e.workflow.AddStep(ctx, rc.run.ID, stepName, "worker", rc.nextOrder())
 	if err != nil {
 		return err
 	}
@@ -271,7 +277,7 @@ func (e *Engine) runWorker(ctx context.Context, rc *runCtx, proj *model.Project,
 	}
 	step.TaskID = &task.ID
 
-	agent, err := e.findAgent(ctx, model.AgentRoleWorker)
+	agent, err := e.findAgentWithSpec(ctx, model.AgentRoleWorker, spec)
 	if err != nil {
 		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
@@ -281,7 +287,7 @@ func (e *Engine) runWorker(ctx context.Context, rc *runCtx, proj *model.Project,
 	// Transition to in_progress
 	_ = e.services.Task.TransitionStatus(ctx, task.ID, model.TaskStatusInProgress)
 
-	runner, err := e.registry.Get("worker")
+	runner, err := e.registry.GetForSpec("worker", string(agent.Specialization))
 	if err != nil {
 		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
@@ -438,7 +444,7 @@ func (e *Engine) processContractActions(ctx context.Context, taskID string, acti
 
 func (e *Engine) processAssignmentActions(ctx context.Context, taskID, assignedBy string, actions []runtime.AssignmentAction) {
 	for _, a := range actions {
-		workerAgent, err := e.findAgent(ctx, model.AgentRole(a.AgentRole))
+		workerAgent, err := e.findAgentWithSpec(ctx, model.AgentRole(a.AgentRole), model.AgentSpecGeneral)
 		if err != nil {
 			e.logger.Error("find agent for assignment", "role", a.AgentRole, "error", err)
 			continue
@@ -540,6 +546,21 @@ func (e *Engine) processTransitionActions(ctx context.Context, task *model.Task,
 
 // findAgent locates the first active agent with the given role.
 func (e *Engine) findAgent(ctx context.Context, role model.AgentRole) (*model.Agent, error) {
+	return e.findAgentWithSpec(ctx, role, model.AgentSpecGeneral)
+}
+
+// findAgentWithSpec locates an active agent matching role + specialization.
+// Prefers exact specialization match; falls back to "general".
+func (e *Engine) findAgentWithSpec(ctx context.Context, role model.AgentRole, spec model.AgentSpecialization) (*model.Agent, error) {
+	agent, err := e.services.Agent.FindByRoleAndSpec(ctx, role, spec)
+	if err != nil {
+		return nil, fmt.Errorf("find agent (%s/%s): %w", role, spec, err)
+	}
+	if agent != nil {
+		return agent, nil
+	}
+
+	// Fallback: scan all agents (backward compatibility for unspecialized setups)
 	agents, _, err := e.services.Agent.List(ctx, 100, 0)
 	if err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
@@ -549,7 +570,65 @@ func (e *Engine) findAgent(ctx context.Context, role model.AgentRole) (*model.Ag
 			return a, nil
 		}
 	}
-	return nil, fmt.Errorf("no active agent with role %q found", role)
+	return nil, fmt.Errorf("no active agent with role %q (specialization %q) found", role, spec)
+}
+
+// inferSpecialization determines the best worker specialization based on task content.
+func inferSpecialization(task *model.Task) model.AgentSpecialization {
+	title := task.Title
+	desc := task.Description
+	combined := title + " " + desc
+
+	keywords := map[model.AgentSpecialization][]string{
+		model.AgentSpecBackend:  {"API", "接口", "后端", "数据库", "migration", "服务端", "handler", "repository"},
+		model.AgentSpecFrontend: {"前端", "页面", "组件", "UI", "React", "Next.js", "样式", "布局"},
+		model.AgentSpecQA:       {"测试", "验证", "回归", "QA", "test", "质量"},
+		model.AgentSpecRelease:  {"发布", "部署", "release", "deploy", "上线"},
+		model.AgentSpecDevOps:   {"CI", "CD", "Docker", "Kubernetes", "基础设施", "监控"},
+	}
+
+	for spec, words := range keywords {
+		for _, w := range words {
+			if containsCI(combined, w) {
+				return spec
+			}
+		}
+	}
+	return model.AgentSpecGeneral
+}
+
+// containsCI performs a case-insensitive substring check.
+func containsCI(s, substr string) bool {
+	sl := len(s)
+	subl := len(substr)
+	if subl > sl {
+		return false
+	}
+	for i := 0; i <= sl-subl; i++ {
+		if equalFoldSlice(s[i:i+subl], substr) {
+			return true
+		}
+	}
+	return false
+}
+
+func equalFoldSlice(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		ca, cb := a[i], b[i]
+		if ca >= 'A' && ca <= 'Z' {
+			ca += 32
+		}
+		if cb >= 'A' && cb <= 'Z' {
+			cb += 32
+		}
+		if ca != cb {
+			return false
+		}
+	}
+	return true
 }
 
 func (e *Engine) failRun(ctx context.Context, rc *runCtx, err error) {
@@ -561,4 +640,3 @@ func (e *Engine) failRun(ctx context.Context, rc *runCtx, err error) {
 		fmt.Sprintf("工作流失败: %s", err.Error()),
 		"project", rc.run.ProjectID, nil, map[string]string{"run_id": rc.run.ID, "error": err.Error()})
 }
-

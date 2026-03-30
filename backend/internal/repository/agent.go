@@ -18,21 +18,21 @@ func NewAgentRepo(db *sql.DB) *AgentRepo {
 
 func (r *AgentRepo) Create(ctx context.Context, a *model.Agent) error {
 	const q = `
-		INSERT INTO agent (name, role, description, reports_to, status, capabilities, metadata)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO agent (name, role, agent_type, specialization, description, reports_to, status, capabilities, metadata)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id, created_at, updated_at`
 	return r.db.QueryRowContext(ctx, q,
-		a.Name, a.Role, a.Description, a.ReportsTo, a.Status, a.Capabilities, a.Metadata,
+		a.Name, a.Role, a.AgentType, a.Specialization, a.Description, a.ReportsTo, a.Status, a.Capabilities, a.Metadata,
 	).Scan(&a.ID, &a.CreatedAt, &a.UpdatedAt)
 }
 
 func (r *AgentRepo) GetByID(ctx context.Context, id string) (*model.Agent, error) {
 	const q = `
-		SELECT id, name, role, description, reports_to, status, capabilities, metadata, created_at, updated_at
+		SELECT id, name, role, agent_type, specialization, description, reports_to, status, capabilities, metadata, created_at, updated_at
 		FROM agent WHERE id = $1`
 	a := &model.Agent{}
 	err := r.db.QueryRowContext(ctx, q, id).Scan(
-		&a.ID, &a.Name, &a.Role, &a.Description, &a.ReportsTo,
+		&a.ID, &a.Name, &a.Role, &a.AgentType, &a.Specialization, &a.Description, &a.ReportsTo,
 		&a.Status, &a.Capabilities, &a.Metadata, &a.CreatedAt, &a.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -51,7 +51,7 @@ func (r *AgentRepo) List(ctx context.Context, limit, offset int) ([]*model.Agent
 	}
 
 	const q = `
-		SELECT id, name, role, description, reports_to, status, capabilities, metadata, created_at, updated_at
+		SELECT id, name, role, agent_type, specialization, description, reports_to, status, capabilities, metadata, created_at, updated_at
 		FROM agent ORDER BY created_at DESC LIMIT $1 OFFSET $2`
 	rows, err := r.db.QueryContext(ctx, q, limit, offset)
 	if err != nil {
@@ -63,7 +63,7 @@ func (r *AgentRepo) List(ctx context.Context, limit, offset int) ([]*model.Agent
 	for rows.Next() {
 		a := &model.Agent{}
 		if err := rows.Scan(
-			&a.ID, &a.Name, &a.Role, &a.Description, &a.ReportsTo,
+			&a.ID, &a.Name, &a.Role, &a.AgentType, &a.Specialization, &a.Description, &a.ReportsTo,
 			&a.Status, &a.Capabilities, &a.Metadata, &a.CreatedAt, &a.UpdatedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("agent.List scan: %w", err)
@@ -76,12 +76,12 @@ func (r *AgentRepo) List(ctx context.Context, limit, offset int) ([]*model.Agent
 func (r *AgentRepo) Update(ctx context.Context, a *model.Agent) error {
 	const q = `
 		UPDATE agent
-		SET name = $2, role = $3, description = $4, reports_to = $5, status = $6,
-		    capabilities = $7, metadata = $8, updated_at = now()
+		SET name = $2, role = $3, agent_type = $4, specialization = $5, description = $6, reports_to = $7, status = $8,
+		    capabilities = $9, metadata = $10, updated_at = now()
 		WHERE id = $1
 		RETURNING updated_at`
 	return r.db.QueryRowContext(ctx, q,
-		a.ID, a.Name, a.Role, a.Description, a.ReportsTo,
+		a.ID, a.Name, a.Role, a.AgentType, a.Specialization, a.Description, a.ReportsTo,
 		a.Status, a.Capabilities, a.Metadata,
 	).Scan(&a.UpdatedAt)
 }
@@ -94,7 +94,7 @@ func (r *AgentRepo) Delete(ctx context.Context, id string) error {
 // GetSubordinates returns all agents that directly report to the given agent.
 func (r *AgentRepo) GetSubordinates(ctx context.Context, agentID string) ([]*model.Agent, error) {
 	const q = `
-		SELECT id, name, role, description, reports_to, status, capabilities, metadata, created_at, updated_at
+		SELECT id, name, role, agent_type, specialization, description, reports_to, status, capabilities, metadata, created_at, updated_at
 		FROM agent WHERE reports_to = $1 ORDER BY created_at`
 	rows, err := r.db.QueryContext(ctx, q, agentID)
 	if err != nil {
@@ -106,7 +106,7 @@ func (r *AgentRepo) GetSubordinates(ctx context.Context, agentID string) ([]*mod
 	for rows.Next() {
 		a := &model.Agent{}
 		if err := rows.Scan(
-			&a.ID, &a.Name, &a.Role, &a.Description, &a.ReportsTo,
+			&a.ID, &a.Name, &a.Role, &a.AgentType, &a.Specialization, &a.Description, &a.ReportsTo,
 			&a.Status, &a.Capabilities, &a.Metadata, &a.CreatedAt, &a.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("agent.GetSubordinates scan: %w", err)
@@ -125,25 +125,25 @@ func (r *AgentRepo) GetOrgTree(ctx context.Context, rootID string) ([]*model.Age
 	if rootID != "" {
 		q = `
 			WITH RECURSIVE tree AS (
-				SELECT id, name, role, description, reports_to, status, capabilities, metadata, created_at, updated_at, 0 AS depth
+				SELECT id, name, role, agent_type, specialization, description, reports_to, status, capabilities, metadata, created_at, updated_at, 0 AS depth
 				FROM agent WHERE id = $1
 				UNION ALL
-				SELECT a.id, a.name, a.role, a.description, a.reports_to, a.status, a.capabilities, a.metadata, a.created_at, a.updated_at, t.depth + 1
+				SELECT a.id, a.name, a.role, a.agent_type, a.specialization, a.description, a.reports_to, a.status, a.capabilities, a.metadata, a.created_at, a.updated_at, t.depth + 1
 				FROM agent a INNER JOIN tree t ON a.reports_to = t.id
 			)
-			SELECT id, name, role, description, reports_to, status, capabilities, metadata, created_at, updated_at
+			SELECT id, name, role, agent_type, specialization, description, reports_to, status, capabilities, metadata, created_at, updated_at
 			FROM tree ORDER BY depth, created_at`
 		args = []interface{}{rootID}
 	} else {
 		q = `
 			WITH RECURSIVE tree AS (
-				SELECT id, name, role, description, reports_to, status, capabilities, metadata, created_at, updated_at, 0 AS depth
+				SELECT id, name, role, agent_type, specialization, description, reports_to, status, capabilities, metadata, created_at, updated_at, 0 AS depth
 				FROM agent WHERE reports_to IS NULL
 				UNION ALL
-				SELECT a.id, a.name, a.role, a.description, a.reports_to, a.status, a.capabilities, a.metadata, a.created_at, a.updated_at, t.depth + 1
+				SELECT a.id, a.name, a.role, a.agent_type, a.specialization, a.description, a.reports_to, a.status, a.capabilities, a.metadata, a.created_at, a.updated_at, t.depth + 1
 				FROM agent a INNER JOIN tree t ON a.reports_to = t.id
 			)
-			SELECT id, name, role, description, reports_to, status, capabilities, metadata, created_at, updated_at
+			SELECT id, name, role, agent_type, specialization, description, reports_to, status, capabilities, metadata, created_at, updated_at
 			FROM tree ORDER BY depth, created_at`
 	}
 
@@ -157,7 +157,7 @@ func (r *AgentRepo) GetOrgTree(ctx context.Context, rootID string) ([]*model.Age
 	for rows.Next() {
 		a := &model.Agent{}
 		if err := rows.Scan(
-			&a.ID, &a.Name, &a.Role, &a.Description, &a.ReportsTo,
+			&a.ID, &a.Name, &a.Role, &a.AgentType, &a.Specialization, &a.Description, &a.ReportsTo,
 			&a.Status, &a.Capabilities, &a.Metadata, &a.CreatedAt, &a.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("agent.GetOrgTree scan: %w", err)
@@ -165,4 +165,27 @@ func (r *AgentRepo) GetOrgTree(ctx context.Context, rootID string) ([]*model.Age
 		list = append(list, a)
 	}
 	return list, rows.Err()
+}
+
+// FindByRoleAndSpec finds the first active agent matching role and specialization.
+// If no exact specialization match is found, falls back to a "general" specialization agent.
+func (r *AgentRepo) FindByRoleAndSpec(ctx context.Context, role model.AgentRole, spec model.AgentSpecialization) (*model.Agent, error) {
+	const q = `
+		SELECT id, name, role, agent_type, specialization, description, reports_to, status, capabilities, metadata, created_at, updated_at
+		FROM agent
+		WHERE role = $1 AND status = 'active' AND specialization IN ($2, 'general')
+		ORDER BY CASE WHEN specialization = $2 THEN 0 ELSE 1 END, created_at
+		LIMIT 1`
+	a := &model.Agent{}
+	err := r.db.QueryRowContext(ctx, q, role, spec).Scan(
+		&a.ID, &a.Name, &a.Role, &a.AgentType, &a.Specialization, &a.Description, &a.ReportsTo,
+		&a.Status, &a.Capabilities, &a.Metadata, &a.CreatedAt, &a.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("agent.FindByRoleAndSpec: %w", err)
+	}
+	return a, nil
 }

@@ -5,7 +5,8 @@ import (
 	"sync"
 )
 
-// Registry manages available AgentRunner implementations keyed by role.
+// Registry manages available AgentRunner implementations.
+// Runners are keyed by "role" or "role:specialization".
 type Registry struct {
 	mu      sync.RWMutex
 	runners map[string]AgentRunner
@@ -15,20 +16,46 @@ func NewRegistry() *Registry {
 	return &Registry{runners: make(map[string]AgentRunner)}
 }
 
+// Register adds a runner keyed by role.
 func (r *Registry) Register(role string, runner AgentRunner) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.runners[role] = runner
 }
 
-func (r *Registry) Get(role string) (AgentRunner, error) {
+// RegisterSpecialized adds a runner keyed by "role:specialization".
+func (r *Registry) RegisterSpecialized(role, specialization string, runner AgentRunner) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := role + ":" + specialization
+	r.runners[key] = runner
+}
+
+// GetForSpec looks up a runner by role + specialization.
+// Falls back to the base role runner if no specialized runner is found.
+func (r *Registry) GetForSpec(role, specialization string) (AgentRunner, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	runner, ok := r.runners[role]
-	if !ok {
-		return nil, fmt.Errorf("no agent runner registered for role %q", role)
+
+	// Try specialized key first
+	if specialization != "" && specialization != "general" {
+		key := role + ":" + specialization
+		if runner, ok := r.runners[key]; ok {
+			return runner, nil
+		}
 	}
-	return runner, nil
+
+	// Fall back to base role
+	if runner, ok := r.runners[role]; ok {
+		return runner, nil
+	}
+
+	return nil, fmt.Errorf("no agent runner registered for role %q (specialization %q)", role, specialization)
+}
+
+// Get looks up a runner by role (backward compatible).
+func (r *Registry) Get(role string) (AgentRunner, error) {
+	return r.GetForSpec(role, "")
 }
 
 func (r *Registry) Roles() []string {
@@ -47,4 +74,9 @@ func (r *Registry) RegisterDefaults() {
 	r.Register("supervisor", &MockSupervisorAgent{})
 	r.Register("worker", &MockWorkerAgent{})
 	r.Register("reviewer", &MockReviewerAgent{})
+
+	// Specialized workers
+	r.RegisterSpecialized("worker", "backend", &MockBackendWorkerAgent{})
+	r.RegisterSpecialized("worker", "frontend", &MockFrontendWorkerAgent{})
+	r.RegisterSpecialized("worker", "qa", &MockQAWorkerAgent{})
 }

@@ -27,6 +27,12 @@ func (s *AgentService) Create(ctx context.Context, a *model.Agent) error {
 	if a.Status == "" {
 		a.Status = model.AgentStatusActive
 	}
+	if a.AgentType == "" {
+		a.AgentType = model.AgentTypeMock
+	}
+	if a.Specialization == "" {
+		a.Specialization = model.AgentSpecGeneral
+	}
 	if len(a.Capabilities) == 0 {
 		a.Capabilities = model.JSON("[]")
 	}
@@ -37,7 +43,7 @@ func (s *AgentService) Create(ctx context.Context, a *model.Agent) error {
 		return fmt.Errorf("create agent: %w", err)
 	}
 	s.audit.LogEvent(ctx, "user", "", "agent.created",
-		fmt.Sprintf("Agent「%s」(%s) 已注册", a.Name, a.Role),
+		fmt.Sprintf("Agent「%s」(%s/%s) 已注册", a.Name, a.Role, a.Specialization),
 		"agent", a.ID, nil, a)
 	return nil
 }
@@ -79,6 +85,11 @@ func (s *AgentService) Delete(ctx context.Context, id string) error {
 
 func (s *AgentService) GetSubordinates(ctx context.Context, agentID string) ([]*model.Agent, error) {
 	return s.repo.GetSubordinates(ctx, agentID)
+}
+
+// FindByRoleAndSpec finds the best matching active agent for a role + specialization.
+func (s *AgentService) FindByRoleAndSpec(ctx context.Context, role model.AgentRole, spec model.AgentSpecialization) (*model.Agent, error) {
+	return s.repo.FindByRoleAndSpec(ctx, role, spec)
 }
 
 // GetOrgTree returns a flat list ordered by depth. If rootID is empty, returns full tree.
