@@ -24,7 +24,8 @@ func (h *OrchestratorHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/orchestrator/runs/{id}", h.GetRun)
 }
 
-// StartRun triggers a workflow run for a given project.
+// StartRun triggers an async workflow run for a given project.
+// Returns immediately with the run record (status=running). Use GET /runs/{id} to poll.
 func (h *OrchestratorHandler) StartRun(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ProjectID string `json:"project_id"`
@@ -38,13 +39,13 @@ func (h *OrchestratorHandler) StartRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	run, err := h.engine.Run(r.Context(), body.ProjectID)
+	run, err := h.engine.RunAsync(r.Context(), body.ProjectID)
 	if err != nil {
 		middleware.ErrorJSON(w, http.StatusInternalServerError, "WORKFLOW_ERROR", err.Error())
 		return
 	}
 
-	middleware.JSON(w, http.StatusCreated, run)
+	middleware.JSON(w, http.StatusAccepted, run)
 }
 
 // ListRuns returns paginated workflow runs from the database.

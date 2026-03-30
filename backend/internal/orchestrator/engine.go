@@ -61,6 +61,7 @@ func (e *Engine) ListRuns(ctx context.Context, p repository.WorkflowRunListParam
 }
 
 // Run executes the full workflow for a project: PM → Supervisor → Worker → Reviewer.
+// This is a synchronous call — use RunAsync for non-blocking execution.
 func (e *Engine) Run(ctx context.Context, projectID string) (*model.WorkflowRun, error) {
 	proj, err := e.services.Project.GetByID(ctx, projectID)
 	if err != nil {
@@ -108,6 +109,62 @@ func (e *Engine) Run(ctx context.Context, projectID string) (*model.WorkflowRun,
 		summary, "project", proj.ID, nil, map[string]string{"run_id": run.ID})
 
 	return e.workflow.GetRun(ctx, run.ID)
+}
+
+// RunAsync starts a workflow in the background and returns the run immediately.
+// The caller can poll GetRun to check progress. Uses context.Background() to
+// decouple the workflow lifetime from the HTTP request.
+func (e *Engine) RunAsync(ctx context.Context, projectID string) (*model.WorkflowRun, error) {
+	proj, err := e.services.Project.GetByID(ctx, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("get project: %w", err)
+	}
+	if proj == nil {
+		return nil, fmt.Errorf("project %s not found", projectID)
+	}
+
+	run, err := e.workflow.CreateRun(ctx, proj.ID)
+	if err != nil {
+		return nil, fmt.Errorf("create workflow run: %w", err)
+	}
+
+	go func() {
+		bgCtx := context.Background()
+		rc := &runCtx{run: run}
+
+		e.services.Audit.LogEvent(bgCtx, "system", "", "workflow.started",
+			fmt.Sprintf("项目「%s」工作流已启动（异步）", proj.Name),
+			"project", proj.ID, nil, map[string]string{"run_id": run.ID})
+
+		if err := e.runPMPhase(bgCtx, rc, proj); err != nil {
+			e.failRun(bgCtx, rc, err)
+			return
+		}
+
+		phases, err := e.services.Phase.ListByProject(bgCtx, proj.ID)
+		if err != nil {
+			e.failRun(bgCtx, rc, err)
+			return
+		}
+
+		for _, phase := range phases {
+			if err := e.runPhase(bgCtx, rc, proj, phase); err != nil {
+				e.logger.Error("phase failed", "phase", phase.Name, "error", err)
+				continue
+			}
+		}
+
+		summary := fmt.Sprintf("项目「%s」工作流完成：%d 个阶段已处理，共 %d 步",
+			proj.Name, len(phases), rc.stepCount)
+		if err := e.workflow.CompleteRun(bgCtx, run, summary); err != nil {
+			e.logger.Error("complete run failed", "error", err)
+		}
+
+		e.services.Audit.LogEvent(bgCtx, "system", "", "workflow.completed",
+			summary, "project", proj.ID, nil, map[string]string{"run_id": run.ID})
+	}()
+
+	return run, nil
 }
 
 // runPMPhase runs the PM agent to decompose the project.

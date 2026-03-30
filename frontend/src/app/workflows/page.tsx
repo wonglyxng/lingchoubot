@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { Activity, ChevronDown, ChevronRight, Play } from "lucide-react";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { Activity, ChevronDown, ChevronRight, Play, RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
 import type { WorkflowRun, WorkflowStep, Project } from "@/lib/types";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -49,24 +49,46 @@ function RunCard({
   run,
   expanded,
   onToggle,
+  onRunUpdated,
 }: {
   run: WorkflowRun;
   expanded: boolean;
   onToggle: () => void;
+  onRunUpdated?: (run: WorkflowRun) => void;
 }) {
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
   const [loadingSteps, setLoadingSteps] = useState(false);
   const st = getWorkflowStatus(run.status);
+  const isRunning = run.status === "running" || run.status === "pending";
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Load steps + poll if running
   useEffect(() => {
     if (!expanded) return;
+
+    const fetchData = () => {
+      api.workflows.get(run.id).then((updated) => {
+        if (updated) {
+          setSteps(Array.isArray(updated.steps) ? updated.steps : []);
+          if (updated.status !== run.status) {
+            onRunUpdated?.(updated);
+          }
+        }
+      }).catch(() => setSteps([]));
+    };
+
     setLoadingSteps(true);
-    api.workflows
-      .steps(run.id)
-      .then((list) => setSteps(Array.isArray(list) ? list : []))
-      .catch(() => setSteps([]))
-      .finally(() => setLoadingSteps(false));
-  }, [expanded, run.id]);
+    fetchData();
+    setLoadingSteps(false);
+
+    if (isRunning) {
+      pollRef.current = setInterval(fetchData, 2000);
+    }
+
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [expanded, run.id, run.status, isRunning, onRunUpdated]);
 
   return (
     <div className="rounded-lg border border-gray-200 bg-white">
@@ -86,6 +108,9 @@ function RunCard({
               运行 #{run.id.slice(0, 8)}
             </span>
             <StatusBadge label={st.label} variant={st.variant} />
+            {isRunning && (
+              <RefreshCw className="h-3.5 w-3.5 animate-spin text-blue-500" />
+            )}
             {run.trigger && (
               <span className="text-xs text-gray-500">触发: {run.trigger}</span>
             )}
@@ -165,10 +190,12 @@ export default function WorkflowsPage() {
     if (!selectedProject) return;
     setSubmitting(true);
     try {
-      await api.workflows.start(selectedProject);
+      const newRun = await api.workflows.start(selectedProject);
       setShowStart(false);
       setSelectedProject("");
-      load();
+      // Insert the new run at the top and auto-expand it
+      setRuns((prev) => [newRun, ...prev]);
+      setExpandedId(newRun.id);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "启动失败";
       alert(msg);
@@ -176,6 +203,12 @@ export default function WorkflowsPage() {
       setSubmitting(false);
     }
   };
+
+  const handleRunUpdated = useCallback((updated: WorkflowRun) => {
+    setRuns((prev) =>
+      prev.map((r) => (r.id === updated.id ? { ...r, status: updated.status, result_summary: updated.result_summary, error: updated.error } : r))
+    );
+  }, []);
 
   return (
     <div className="min-h-full bg-gray-50 p-6">
@@ -250,6 +283,7 @@ export default function WorkflowsPage() {
               onToggle={() =>
                 setExpandedId((prev) => (prev === r.id ? null : r.id))
               }
+              onRunUpdated={handleRunUpdated}
             />
           ))}
         </div>

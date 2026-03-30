@@ -1,6 +1,6 @@
 import type {
   Project, Phase, Agent, Task, Artifact, ArtifactVersion,
-  ApprovalRequest, AuditLog, WorkflowRun, WorkflowStep, ListResponse,
+  ApprovalRequest, AuditLog, WorkflowRun, ListResponse,
   ReviewReport, TaskContract, TaskAssignment, HandoffSnapshot, ToolCall,
 } from "./types";
 
@@ -235,7 +235,6 @@ export const api = {
       return get<ListResponse<WorkflowRun>>(`/api/v1/orchestrator/runs?${q.toString()}`);
     },
     get: (id: string) => get<WorkflowRun>(`/api/v1/orchestrator/runs/${id}`),
-    steps: (runId: string) => get<WorkflowStep[]>(`/api/v1/orchestrator/runs/${runId}/steps`),
     start: (projectId: string) => post<WorkflowRun>("/api/v1/orchestrator/runs", { project_id: projectId }),
   },
 };

@@ -193,6 +193,7 @@ export interface WorkflowRun {
   result_summary: string;
   error: string;
   metadata: Record<string, unknown>;
+  steps?: WorkflowStep[];
   created_at: string;
   updated_at: string;
   completed_at?: string;
