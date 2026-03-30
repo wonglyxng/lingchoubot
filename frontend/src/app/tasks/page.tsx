@@ -97,8 +97,10 @@ export default function TasksPage() {
   const openCreate = async () => {
     try {
       const res = await api.projects.list(200, 0);
-      setProjects(res.items);
-    } catch { /* ignore */ }
+      setProjects(res.items ?? []);
+    } catch {
+      setProjects([]);
+    }
     setShowCreate(true);
   };
 
@@ -249,13 +251,13 @@ export default function TasksPage() {
             </div>
           </div>
 
-          {(byStatus.get("__other__")?.length ?? 0) > 0 && (
+          {(() => { const others = byStatus.get("__other__") ?? []; return others.length > 0 ? (
             <div className="rounded-lg border border-gray-200 bg-white">
               <div className="border-b border-gray-200 px-4 py-3">
                 <h2 className="text-sm font-semibold text-gray-900">
                   其他
                   <span className="ml-2 font-normal text-gray-500">
-                    ({byStatus.get("__other__")!.length})
+                    ({others.length})
                   </span>
                 </h2>
                 <p className="mt-0.5 text-xs text-gray-500">
@@ -263,7 +265,7 @@ export default function TasksPage() {
                 </p>
               </div>
               <div className="grid gap-2 p-4 sm:grid-cols-2 lg:grid-cols-3">
-                {byStatus.get("__other__")!.map((t) => (
+                {others.map((t) => (
                   <div key={t.id} className="flex flex-col gap-1">
                     <TaskCard task={t} />
                     <div className="px-1">
@@ -276,7 +278,7 @@ export default function TasksPage() {
                 ))}
               </div>
             </div>
-          )}
+          ) : null; })()}
         </div>
       )}
     </div>

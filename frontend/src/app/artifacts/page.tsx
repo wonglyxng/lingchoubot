@@ -66,7 +66,7 @@ export default function ArtifactsPage() {
       )}
 
       {!loading && error && (
-        <div className="rounded-lg border border-red-200 bg-white px-5 py-4 text-sm text-red-700">
+        <div className="rounded-lg border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">
           {error}
         </div>
       )}

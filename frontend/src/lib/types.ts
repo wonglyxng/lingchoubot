@@ -134,8 +134,8 @@ export interface ToolCall {
   input: unknown;
   output: unknown;
   status: string;
-  error_message: string;
-  denied_reason: string;
+  error_message?: string;
+  denied_reason?: string;
   duration_ms: number;
   metadata: Record<string, unknown>;
   created_at: string;

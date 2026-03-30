@@ -17,6 +17,9 @@ async function get<T>(path: string): Promise<T> {
   if (!body.success) {
     throw new Error(body.error?.message || "API error");
   }
+  if (body.data == null) {
+    return {} as T;
+  }
   // 后端空列表可能返回 items:null，在此统一修正为空数组
   const data = body.data as Record<string, unknown>;
   if (data && "items" in data && data.items == null) {

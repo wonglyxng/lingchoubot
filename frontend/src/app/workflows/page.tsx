@@ -63,8 +63,8 @@ function RunCard({
     setLoadingSteps(true);
     api.workflows
       .steps(run.id)
-      .then(setSteps)
-      .catch(() => {})
+      .then((list) => setSteps(Array.isArray(list) ? list : []))
+      .catch(() => setSteps([]))
       .finally(() => setLoadingSteps(false));
   }, [expanded, run.id]);
 
@@ -154,8 +154,10 @@ export default function WorkflowsPage() {
   const openStart = async () => {
     try {
       const res = await api.projects.list(200, 0);
-      setProjects(res.items);
-    } catch { /* ignore */ }
+      setProjects(res.items ?? []);
+    } catch {
+      setProjects([]);
+    }
     setShowStart(true);
   };
 
