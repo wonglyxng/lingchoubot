@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { FolderKanban, Plus } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Project } from "@/lib/types";
 import { StatusBadge } from "@/components/StatusBadge";
+import { FormModal, FormField, inputClass, textareaClass } from "@/components/FormModal";
 import { formatTime, getProjectStatus } from "@/lib/utils";
 
 function truncate(text: string, max: number): string {
@@ -18,26 +19,37 @@ export default function ProjectsPage() {
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState<Project[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [form, setForm] = useState({ name: "", description: "" });
 
-  useEffect(() => {
-    let cancelled = false;
+  const load = useCallback(() => {
     setLoading(true);
     setError(null);
     api.projects
       .list()
-      .then((res) => {
-        if (!cancelled) setItems(res.items);
-      })
-      .catch((e: Error) => {
-        if (!cancelled) setError(e.message || "加载失败");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+      .then((res) => setItems(res.items))
+      .catch((e: Error) => setError(e.message || "加载失败"))
+      .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleCreate = async () => {
+    if (!form.name.trim()) return;
+    setSubmitting(true);
+    try {
+      await api.projects.create({ name: form.name.trim(), description: form.description.trim() });
+      setShowCreate(false);
+      setForm({ name: "", description: "" });
+      load();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "创建失败";
+      alert(msg);
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <div className="p-6">
@@ -53,14 +65,42 @@ export default function ProjectsPage() {
         </div>
         <button
           type="button"
-          disabled
-          className="inline-flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-400 shadow-sm"
-          title="即将开放"
+          onClick={() => setShowCreate(true)}
+          className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700"
         >
           <Plus className="h-4 w-4" />
           新建项目
         </button>
       </div>
+
+      <FormModal
+        open={showCreate}
+        onClose={() => setShowCreate(false)}
+        title="新建项目"
+        onSubmit={handleCreate}
+        submitting={submitting}
+      >
+        <FormField label="项目名称" required>
+          <input
+            className={inputClass}
+            value={form.name}
+            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            placeholder="例如：灵筹 MVP"
+            maxLength={200}
+            required
+          />
+        </FormField>
+        <FormField label="描述">
+          <textarea
+            className={textareaClass}
+            rows={3}
+            value={form.description}
+            onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+            placeholder="项目简要描述"
+            maxLength={2000}
+          />
+        </FormField>
+      </FormModal>
 
       {loading && (
         <div className="rounded-lg border border-gray-200 bg-white px-5 py-12 text-center text-sm text-gray-500">

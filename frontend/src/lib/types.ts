@@ -25,6 +25,8 @@ export interface Agent {
   id: string;
   name: string;
   role: string;
+  agent_type: string;
+  specialization: string;
   description: string;
   reports_to?: string;
   status: string;
@@ -128,11 +130,42 @@ export interface ToolCall {
   task_id?: string;
   agent_id: string;
   tool_name: string;
+  action: string;
   input: unknown;
   output: unknown;
   status: string;
   error_message: string;
+  denied_reason: string;
   duration_ms: number;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  completed_at?: string;
+}
+
+export interface WorkflowRun {
+  id: string;
+  project_id: string;
+  status: string;
+  trigger: string;
+  result_summary: string;
+  error: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string;
+}
+
+export interface WorkflowStep {
+  id: string;
+  run_id: string;
+  step_name: string;
+  agent_id?: string;
+  status: string;
+  input_summary: string;
+  output_summary: string;
+  error: string;
+  duration_ms: number;
+  sort_order: number;
   metadata: Record<string, unknown>;
   created_at: string;
   completed_at?: string;

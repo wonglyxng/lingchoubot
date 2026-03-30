@@ -83,6 +83,7 @@ export default function Home() {
           {[
             { href: "/projects", label: "项目" },
             { href: "/tasks", label: "任务" },
+            { href: "/workflows", label: "工作流" },
             { href: "/approvals", label: "审批" },
           ].map((l) => (
             <Link

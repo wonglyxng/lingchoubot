@@ -45,6 +45,30 @@ const agentRoleMap: Record<string, string> = {
   reviewer:   "评审者",
 };
 
+const agentTypeMap: Record<string, string> = {
+  mock:  "模拟",
+  llm:   "LLM",
+  human: "人工",
+};
+
+const agentSpecMap: Record<string, string> = {
+  general:  "通用",
+  backend:  "后端",
+  frontend: "前端",
+  qa:       "测试",
+  release:  "发布",
+  devops:   "运维",
+  design:   "设计",
+};
+
+const workflowStatusMap: Record<string, StatusDef> = {
+  pending:   { label: "待运行", variant: "default" },
+  running:   { label: "运行中", variant: "info" },
+  completed: { label: "已完成", variant: "success" },
+  failed:    { label: "失败",   variant: "error" },
+  cancelled: { label: "已取消", variant: "muted" },
+};
+
 export function getTaskStatus(status: string): StatusDef {
   return taskStatusMap[status] || { label: status, variant: "default" };
 }
@@ -63,6 +87,18 @@ export function getPhaseStatus(status: string): StatusDef {
 
 export function getAgentRole(role: string): string {
   return agentRoleMap[role] || role;
+}
+
+export function getAgentType(t: string): string {
+  return agentTypeMap[t] || t;
+}
+
+export function getAgentSpec(s: string): string {
+  return agentSpecMap[s] || s;
+}
+
+export function getWorkflowStatus(status: string): StatusDef {
+  return workflowStatusMap[status] || { label: status, variant: "default" };
 }
 
 const variantClasses: Record<StatusVariant, string> = {

@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { ListChecks } from "lucide-react";
+import { useEffect, useMemo, useState, useCallback } from "react";
+import { ListChecks, Plus } from "lucide-react";
 import { api } from "@/lib/api";
-import type { Task } from "@/lib/types";
+import type { Task, Project } from "@/lib/types";
 import { StatusBadge } from "@/components/StatusBadge";
+import { FormModal, FormField, inputClass, textareaClass, selectClass } from "@/components/FormModal";
 import { getTaskStatus, relativeTime, type StatusVariant } from "@/lib/utils";
 
 const MAIN_STATUSES = [
@@ -76,26 +77,51 @@ export default function TasksPage() {
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState<Task[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [form, setForm] = useState({ title: "", description: "", project_id: "", priority: 5 });
 
-  useEffect(() => {
-    let cancelled = false;
+  const load = useCallback(() => {
     setLoading(true);
     setError(null);
     api.tasks
       .list({ limit: 500, offset: 0 })
-      .then((res) => {
-        if (!cancelled) setItems(res.items);
-      })
-      .catch((e: Error) => {
-        if (!cancelled) setError(e.message || "加载失败");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+      .then((res) => setItems(res.items))
+      .catch((e: Error) => setError(e.message || "加载失败"))
+      .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const openCreate = async () => {
+    try {
+      const res = await api.projects.list(200, 0);
+      setProjects(res.items);
+    } catch { /* ignore */ }
+    setShowCreate(true);
+  };
+
+  const handleCreate = async () => {
+    if (!form.title.trim() || !form.project_id) return;
+    setSubmitting(true);
+    try {
+      await api.tasks.create({
+        title: form.title.trim(),
+        description: form.description.trim(),
+        project_id: form.project_id,
+        priority: form.priority,
+      });
+      setShowCreate(false);
+      setForm({ title: "", description: "", project_id: "", priority: 5 });
+      load();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "创建失败";
+      alert(msg);
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const byStatus = useMemo(() => {
     const map = new Map<string, Task[]>();
@@ -119,15 +145,77 @@ export default function TasksPage() {
 
   return (
     <div className="min-h-full bg-gray-50 p-6">
-      <div className="mb-6 flex items-center gap-3">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-700">
-          <ListChecks className="h-5 w-5" />
+      <div className="mb-6 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-700">
+            <ListChecks className="h-5 w-5" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-semibold text-gray-900">任务看板</h1>
+            <p className="mt-1 text-sm text-gray-500">按状态分列查看任务</p>
+          </div>
         </div>
-        <div>
-          <h1 className="text-2xl font-semibold text-gray-900">任务看板</h1>
-          <p className="mt-1 text-sm text-gray-500">按状态分列查看任务</p>
-        </div>
+        <button
+          type="button"
+          onClick={openCreate}
+          className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700"
+        >
+          <Plus className="h-4 w-4" />
+          新建任务
+        </button>
       </div>
+
+      <FormModal
+        open={showCreate}
+        onClose={() => setShowCreate(false)}
+        title="新建任务"
+        onSubmit={handleCreate}
+        submitting={submitting}
+      >
+        <FormField label="所属项目" required>
+          <select
+            className={selectClass}
+            value={form.project_id}
+            onChange={(e) => setForm((f) => ({ ...f, project_id: e.target.value }))}
+            required
+          >
+            <option value="">选择项目</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        </FormField>
+        <FormField label="任务标题" required>
+          <input
+            className={inputClass}
+            value={form.title}
+            onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+            placeholder="例如：实现用户认证模块"
+            maxLength={200}
+            required
+          />
+        </FormField>
+        <FormField label="优先级（1=最高，10=最低）">
+          <input
+            className={inputClass}
+            type="number"
+            min={1}
+            max={10}
+            value={form.priority}
+            onChange={(e) => setForm((f) => ({ ...f, priority: parseInt(e.target.value) || 5 }))}
+          />
+        </FormField>
+        <FormField label="描述">
+          <textarea
+            className={textareaClass}
+            rows={3}
+            value={form.description}
+            onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+            placeholder="任务简要描述"
+            maxLength={5000}
+          />
+        </FormField>
+      </FormModal>
 
       {loading && (
         <div className="rounded-lg border border-gray-200 bg-white px-5 py-12 text-center text-sm text-gray-500">

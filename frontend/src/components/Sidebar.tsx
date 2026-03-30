@@ -10,6 +10,7 @@ import {
   Package,
   ShieldCheck,
   ScrollText,
+  Activity,
 } from "lucide-react";
 
 const navItems = [
@@ -17,6 +18,7 @@ const navItems = [
   { href: "/projects", label: "项目", icon: FolderKanban },
   { href: "/tasks", label: "任务", icon: ListChecks },
   { href: "/agents", label: "Agent", icon: Bot },
+  { href: "/workflows", label: "工作流", icon: Activity },
   { href: "/artifacts", label: "工件", icon: Package },
   { href: "/approvals", label: "审批", icon: ShieldCheck },
   { href: "/audit", label: "审计", icon: ScrollText },

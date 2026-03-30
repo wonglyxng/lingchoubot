@@ -23,7 +23,7 @@ type Tool interface {
 // Tools that implement this interface support per-action permission checking.
 type ActionAwareTool interface {
 	Tool
-	Actions() []string       // 可执行的动作列表，如 ["read", "write", "delete"]
+	Actions() []string                 // 可执行的动作列表，如 ["read", "write", "delete"]
 	RiskLevel(action string) RiskLevel // 指定动作的风险等级
 }
 
