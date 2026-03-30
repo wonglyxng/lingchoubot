@@ -45,14 +45,26 @@ func main() {
 	// --- Step 2: 注册 Agent 组织树 ---
 	next("注册 Agent 组织树（PM → Supervisor → Worker / Reviewer）")
 
-	pmID := mustCreateAgent("灵筹-项目经理", "pm", "", "项目分解、阶段规划与任务创建", []string{"tool.*"}, "mock", "general")
-	supID := mustCreateAgent("灵筹-主管", "supervisor", pmID, "任务契约制定、执行分派与监督", []string{"tool.*"}, "mock", "general")
-	wkID := mustCreateAgent("灵筹-后端执行者", "worker", supID, "后端任务执行、工件生成与交接", []string{"tool.doc_generator", "tool.artifact_storage", "tool.test_runner"}, "mock", "backend")
-	wkFeID := mustCreateAgent("灵筹-前端执行者", "worker", supID, "前端任务执行、页面实现", []string{"tool.doc_generator", "tool.artifact_storage"}, "mock", "frontend")
-	rvID := mustCreateAgent("灵筹-评审员", "reviewer", pmID, "独立评审、质量检查与评审报告", []string{"tool.*"}, "mock", "qa")
+	pmID := mustCreateAgentFull("灵筹-项目经理", "pm", "PM_SUPERVISOR",
+		[]string{"DEVELOPMENT_SUPERVISOR", "QA_SUPERVISOR"},
+		"", "项目分解、阶段规划与任务创建", []string{"tool.*"}, "mock", "general")
+	supID := mustCreateAgentFull("灵筹-开发主管", "supervisor", "DEVELOPMENT_SUPERVISOR",
+		[]string{"BACKEND_DEV_WORKER", "FRONTEND_DEV_WORKER"},
+		pmID, "开发任务契约制定、执行分派与监督", []string{"tool.*"}, "mock", "general")
+	qaSupID := mustCreateAgentFull("灵筹-测试主管", "supervisor", "QA_SUPERVISOR",
+		[]string{"QA_WORKER", "REVIEWER_WORKER"},
+		pmID, "测试与评审任务管理、质量门", []string{"tool.*"}, "mock", "qa")
+	wkID := mustCreateAgentFull("灵筹-后端执行者", "worker", "BACKEND_DEV_WORKER", nil,
+		supID, "后端任务执行、工件生成与交接", []string{"tool.doc_generator", "tool.artifact_storage", "tool.test_runner"}, "mock", "backend")
+	wkFeID := mustCreateAgentFull("灵筹-前端执行者", "worker", "FRONTEND_DEV_WORKER", nil,
+		supID, "前端任务执行、页面实现", []string{"tool.doc_generator", "tool.artifact_storage"}, "mock", "frontend")
+	qaWkID := mustCreateAgentFull("灵筹-测试执行者", "worker", "QA_WORKER", nil,
+		qaSupID, "执行测试验证与测试工件产出", []string{"tool.test_runner"}, "mock", "qa")
+	rvID := mustCreateAgentFull("灵筹-评审员", "reviewer", "REVIEWER_WORKER", nil,
+		qaSupID, "独立评审、质量检查与评审报告", []string{"tool.*"}, "mock", "qa")
 
-	printOK("已注册 5 个 Agent: PM(%s), Sup(%s), BackendWorker(%s), FrontendWorker(%s), Reviewer(%s)",
-		short(pmID), short(supID), short(wkID), short(wkFeID), short(rvID))
+	printOK("已注册 7 个 Agent: PM(%s), DevSup(%s), QASup(%s), BackendWk(%s), FrontendWk(%s), QAWk(%s), Reviewer(%s)",
+		short(pmID), short(supID), short(qaSupID), short(wkID), short(wkFeID), short(qaWkID), short(rvID))
 
 	// --- Step 3: 创建 Demo 项目 ---
 	next("创建 Demo 项目")
@@ -375,6 +387,10 @@ func mustGet(path string) map[string]any {
 }
 
 func mustCreateAgent(name, role, reportsTo, desc string, capabilities []string, agentType, specialization string) string {
+	return mustCreateAgentFull(name, role, "", nil, reportsTo, desc, capabilities, agentType, specialization)
+}
+
+func mustCreateAgentFull(name, role, roleCode string, managedRoles []string, reportsTo, desc string, capabilities []string, agentType, specialization string) string {
 	body := map[string]any{
 		"name":           name,
 		"role":           role,
@@ -384,6 +400,12 @@ func mustCreateAgent(name, role, reportsTo, desc string, capabilities []string, 
 		"status":         "active",
 		"capabilities":   capabilities,
 		"metadata":       map[string]any{},
+	}
+	if roleCode != "" {
+		body["role_code"] = roleCode
+	}
+	if len(managedRoles) > 0 {
+		body["managed_roles"] = managedRoles
 	}
 	if reportsTo != "" {
 		body["reports_to"] = reportsTo

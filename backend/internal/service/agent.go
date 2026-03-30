@@ -33,6 +33,18 @@ func (s *AgentService) Create(ctx context.Context, a *model.Agent) error {
 	if a.Specialization == "" {
 		a.Specialization = model.AgentSpecGeneral
 	}
+	if a.RoleCode == "" && a.Role != "" {
+		a.RoleCode = defaultRoleCode(a.Role)
+	}
+	if len(a.ManagedRoles) == 0 {
+		a.ManagedRoles = model.JSON("[]")
+	}
+	if len(a.AllowedTools) == 0 {
+		a.AllowedTools = model.JSON("[]")
+	}
+	if a.RiskLevel == "" {
+		a.RiskLevel = model.RiskLevelMedium
+	}
 	if len(a.Capabilities) == 0 {
 		a.Capabilities = model.JSON("[]")
 	}
@@ -95,4 +107,25 @@ func (s *AgentService) FindByRoleAndSpec(ctx context.Context, role model.AgentRo
 // GetOrgTree returns a flat list ordered by depth. If rootID is empty, returns full tree.
 func (s *AgentService) GetOrgTree(ctx context.Context, rootID string) ([]*model.Agent, error) {
 	return s.repo.GetOrgTree(ctx, rootID)
+}
+
+// FindByRoleCode finds the first active agent with a given role_code.
+func (s *AgentService) FindByRoleCode(ctx context.Context, roleCode model.RoleCode) (*model.Agent, error) {
+	return s.repo.FindByRoleCode(ctx, roleCode)
+}
+
+// defaultRoleCode returns a sensible role_code when none is provided.
+func defaultRoleCode(role model.AgentRole) model.RoleCode {
+	switch role {
+	case model.AgentRolePM:
+		return model.RoleCodePMSupervisor
+	case model.AgentRoleSupervisor:
+		return model.RoleCodeDevelopmentSupervisor
+	case model.AgentRoleWorker:
+		return model.RoleCodeBackendDevWorker
+	case model.AgentRoleReviewer:
+		return model.RoleCodeReviewerWorker
+	default:
+		return ""
+	}
 }

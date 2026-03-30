@@ -34,7 +34,8 @@ func TestTaskRepo_Create(t *testing.T) {
 
 	mock.ExpectQuery(`INSERT INTO task`).
 		WithArgs(task.ProjectID, task.PhaseID, task.ParentTaskID, task.Title, task.Description,
-			task.Status, task.Priority, task.AssigneeID, task.InputContext, task.OutputSummary, task.Metadata).
+			task.Status, task.Priority, task.AssigneeID, task.ExecutionDomain, task.OwnerSupervisorID,
+			task.InputContext, task.OutputSummary, task.Metadata).
 		WillReturnRows(rows)
 
 	if err := repo.Create(context.Background(), task); err != nil {
@@ -60,11 +61,13 @@ func TestTaskRepo_GetByID(t *testing.T) {
 
 	rows := sqlmock.NewRows([]string{
 		"id", "project_id", "phase_id", "parent_task_id", "title", "description",
-		"status", "priority", "assignee_id", "input_context", "output_summary", "metadata",
+		"status", "priority", "assignee_id", "execution_domain", "owner_supervisor_id",
+		"input_context", "output_summary", "metadata",
 		"created_at", "updated_at",
 	}).AddRow(
 		"task-1", "proj-1", nil, nil, "设计 API", "描述",
-		"pending", 3, nil, []byte("{}"), []byte("{}"), []byte("{}"),
+		"pending", 3, nil, "general", nil,
+		[]byte("{}"), []byte("{}"), []byte("{}"),
 		now, now,
 	)
 
@@ -101,7 +104,8 @@ func TestTaskRepo_GetByID_NotFound(t *testing.T) {
 
 	rows := sqlmock.NewRows([]string{
 		"id", "project_id", "phase_id", "parent_task_id", "title", "description",
-		"status", "priority", "assignee_id", "input_context", "output_summary", "metadata",
+		"status", "priority", "assignee_id", "execution_domain", "owner_supervisor_id",
+		"input_context", "output_summary", "metadata",
 		"created_at", "updated_at",
 	})
 
@@ -137,13 +141,14 @@ func TestTaskRepo_List(t *testing.T) {
 
 	listRows := sqlmock.NewRows([]string{
 		"id", "project_id", "phase_id", "parent_task_id", "title", "description",
-		"status", "priority", "assignee_id", "input_context", "output_summary", "metadata",
+		"status", "priority", "assignee_id", "execution_domain", "owner_supervisor_id",
+		"input_context", "output_summary", "metadata",
 		"created_at", "updated_at",
 	}).
 		AddRow("t-1", "proj-1", nil, nil, "任务1", "描述1",
-			"pending", 3, nil, []byte("{}"), []byte("{}"), []byte("{}"), now, now).
+			"pending", 3, nil, "general", nil, []byte("{}"), []byte("{}"), []byte("{}"), now, now).
 		AddRow("t-2", "proj-1", nil, nil, "任务2", "描述2",
-			"assigned", 2, nil, []byte("{}"), []byte("{}"), []byte("{}"), now, now)
+			"assigned", 2, nil, "development", nil, []byte("{}"), []byte("{}"), []byte("{}"), now, now)
 
 	mock.ExpectQuery(`SELECT .+ FROM task`).
 		WithArgs("proj-1", 10, 0).
@@ -184,10 +189,11 @@ func TestTaskRepo_ListWithMultipleFilters(t *testing.T) {
 
 	listRows := sqlmock.NewRows([]string{
 		"id", "project_id", "phase_id", "parent_task_id", "title", "description",
-		"status", "priority", "assignee_id", "input_context", "output_summary", "metadata",
+		"status", "priority", "assignee_id", "execution_domain", "owner_supervisor_id",
+		"input_context", "output_summary", "metadata",
 		"created_at", "updated_at",
 	}).AddRow("t-1", "proj-1", strPtr("phase-1"), nil, "任务1", "描述1",
-		"pending", 3, nil, []byte("{}"), []byte("{}"), []byte("{}"), now, now)
+		"pending", 3, nil, "general", nil, []byte("{}"), []byte("{}"), []byte("{}"), now, now)
 
 	mock.ExpectQuery(`SELECT .+ FROM task`).
 		WithArgs("proj-1", "phase-1", "pending", 10, 0).
@@ -280,6 +286,7 @@ func TestTaskRepo_Update(t *testing.T) {
 	mock.ExpectQuery(`UPDATE task`).
 		WithArgs(task.ID, task.Title, task.Description, task.Status, task.Priority,
 			task.PhaseID, task.ParentTaskID, task.AssigneeID,
+			task.ExecutionDomain, task.OwnerSupervisorID,
 			task.InputContext, task.OutputSummary, task.Metadata).
 		WillReturnRows(rows)
 

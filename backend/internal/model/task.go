@@ -4,6 +4,15 @@ import "time"
 
 type TaskStatus string
 
+// ExecutionDomain 任务执行域 — 标识任务归属的主管域
+type ExecutionDomain string
+
+const (
+	ExecDomainGeneral     ExecutionDomain = "general"
+	ExecDomainDevelopment ExecutionDomain = "development"
+	ExecDomainQA          ExecutionDomain = "qa"
+)
+
 const (
 	TaskStatusPending          TaskStatus = "pending"
 	TaskStatusAssigned         TaskStatus = "assigned"
@@ -40,18 +49,20 @@ func (s TaskStatus) CanTransitionTo(target TaskStatus) bool {
 }
 
 type Task struct {
-	ID            string     `json:"id"`
-	ProjectID     string     `json:"project_id"`
-	PhaseID       *string    `json:"phase_id,omitempty"`
-	ParentTaskID  *string    `json:"parent_task_id,omitempty"`
-	Title         string     `json:"title"`
-	Description   string     `json:"description"`
-	Status        TaskStatus `json:"status"`
-	Priority      int        `json:"priority"`
-	AssigneeID    *string    `json:"assignee_id,omitempty"`
-	InputContext  JSON       `json:"input_context"`
-	OutputSummary JSON       `json:"output_summary"`
-	Metadata      JSON       `json:"metadata"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID                string          `json:"id"`
+	ProjectID         string          `json:"project_id"`
+	PhaseID           *string         `json:"phase_id,omitempty"`
+	ParentTaskID      *string         `json:"parent_task_id,omitempty"`
+	Title             string          `json:"title"`
+	Description       string          `json:"description"`
+	Status            TaskStatus      `json:"status"`
+	Priority          int             `json:"priority"`
+	AssigneeID        *string         `json:"assignee_id,omitempty"`
+	ExecutionDomain   ExecutionDomain `json:"execution_domain"`
+	OwnerSupervisorID *string         `json:"owner_supervisor_id,omitempty"`
+	InputContext      JSON            `json:"input_context"`
+	OutputSummary     JSON            `json:"output_summary"`
+	Metadata          JSON            `json:"metadata"`
+	CreatedAt         time.Time       `json:"created_at"`
+	UpdatedAt         time.Time       `json:"updated_at"`
 }

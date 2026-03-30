@@ -38,15 +38,42 @@ const (
 	AgentSpecDesign   AgentSpecialization = "design"
 )
 
+// RoleCode 业务职责码 — 比 AgentRole 更细粒度，表达真实组织角色
+type RoleCode string
+
+const (
+	RoleCodePMSupervisor          RoleCode = "PM_SUPERVISOR"
+	RoleCodeDevelopmentSupervisor RoleCode = "DEVELOPMENT_SUPERVISOR"
+	RoleCodeQASupervisor          RoleCode = "QA_SUPERVISOR"
+	RoleCodeBackendDevWorker      RoleCode = "BACKEND_DEV_WORKER"
+	RoleCodeFrontendDevWorker     RoleCode = "FRONTEND_DEV_WORKER"
+	RoleCodeQAWorker              RoleCode = "QA_WORKER"
+	RoleCodeReviewerWorker        RoleCode = "REVIEWER_WORKER"
+)
+
+// RiskLevel 风险级别
+type RiskLevel string
+
+const (
+	RiskLevelLow      RiskLevel = "low"
+	RiskLevelMedium   RiskLevel = "medium"
+	RiskLevelHigh     RiskLevel = "high"
+	RiskLevelCritical RiskLevel = "critical"
+)
+
 type Agent struct {
 	ID             string              `json:"id"`
 	Name           string              `json:"name"`
 	Role           AgentRole           `json:"role"`
+	RoleCode       RoleCode            `json:"role_code"`
 	AgentType      AgentType           `json:"agent_type"`
 	Specialization AgentSpecialization `json:"specialization"`
 	Description    string              `json:"description"`
 	ReportsTo      *string             `json:"reports_to,omitempty"`
 	Status         AgentStatus         `json:"status"`
+	ManagedRoles   JSON                `json:"managed_roles"`
+	AllowedTools   JSON                `json:"allowed_tools"`
+	RiskLevel      RiskLevel           `json:"risk_level"`
 	Capabilities   JSON                `json:"capabilities"`
 	Metadata       JSON                `json:"metadata"`
 	CreatedAt      time.Time           `json:"created_at"`

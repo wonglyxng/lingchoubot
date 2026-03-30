@@ -18,23 +18,33 @@ func NewAgentRepo(db *sql.DB) *AgentRepo {
 
 func (r *AgentRepo) Create(ctx context.Context, a *model.Agent) error {
 	const q = `
-		INSERT INTO agent (name, role, agent_type, specialization, description, reports_to, status, capabilities, metadata)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO agent (name, role, role_code, agent_type, specialization, description, reports_to, status,
+		                   managed_roles, allowed_tools, risk_level, capabilities, metadata)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING id, created_at, updated_at`
 	return r.db.QueryRowContext(ctx, q,
-		a.Name, a.Role, a.AgentType, a.Specialization, a.Description, a.ReportsTo, a.Status, a.Capabilities, a.Metadata,
+		a.Name, a.Role, a.RoleCode, a.AgentType, a.Specialization, a.Description, a.ReportsTo, a.Status,
+		a.ManagedRoles, a.AllowedTools, a.RiskLevel, a.Capabilities, a.Metadata,
 	).Scan(&a.ID, &a.CreatedAt, &a.UpdatedAt)
 }
 
-func (r *AgentRepo) GetByID(ctx context.Context, id string) (*model.Agent, error) {
-	const q = `
-		SELECT id, name, role, agent_type, specialization, description, reports_to, status, capabilities, metadata, created_at, updated_at
-		FROM agent WHERE id = $1`
+// agentColumns is the canonical SELECT column list for agent queries.
+const agentColumns = `id, name, role, role_code, agent_type, specialization, description, reports_to, status,
+		managed_roles, allowed_tools, risk_level, capabilities, metadata, created_at, updated_at`
+
+func scanAgent(s interface{ Scan(dest ...any) error }) (*model.Agent, error) {
 	a := &model.Agent{}
-	err := r.db.QueryRowContext(ctx, q, id).Scan(
-		&a.ID, &a.Name, &a.Role, &a.AgentType, &a.Specialization, &a.Description, &a.ReportsTo,
-		&a.Status, &a.Capabilities, &a.Metadata, &a.CreatedAt, &a.UpdatedAt,
+	err := s.Scan(
+		&a.ID, &a.Name, &a.Role, &a.RoleCode, &a.AgentType, &a.Specialization, &a.Description, &a.ReportsTo,
+		&a.Status, &a.ManagedRoles, &a.AllowedTools, &a.RiskLevel, &a.Capabilities, &a.Metadata,
+		&a.CreatedAt, &a.UpdatedAt,
 	)
+	return a, err
+}
+
+func (r *AgentRepo) GetByID(ctx context.Context, id string) (*model.Agent, error) {
+	q := `SELECT ` + agentColumns + ` FROM agent WHERE id = $1`
+	a, err := scanAgent(r.db.QueryRowContext(ctx, q, id))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -50,9 +60,7 @@ func (r *AgentRepo) List(ctx context.Context, limit, offset int) ([]*model.Agent
 		return nil, 0, fmt.Errorf("agent.List count: %w", err)
 	}
 
-	const q = `
-		SELECT id, name, role, agent_type, specialization, description, reports_to, status, capabilities, metadata, created_at, updated_at
-		FROM agent ORDER BY created_at DESC LIMIT $1 OFFSET $2`
+	q := `SELECT ` + agentColumns + ` FROM agent ORDER BY created_at DESC LIMIT $1 OFFSET $2`
 	rows, err := r.db.QueryContext(ctx, q, limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("agent.List: %w", err)
@@ -61,11 +69,8 @@ func (r *AgentRepo) List(ctx context.Context, limit, offset int) ([]*model.Agent
 
 	var list []*model.Agent
 	for rows.Next() {
-		a := &model.Agent{}
-		if err := rows.Scan(
-			&a.ID, &a.Name, &a.Role, &a.AgentType, &a.Specialization, &a.Description, &a.ReportsTo,
-			&a.Status, &a.Capabilities, &a.Metadata, &a.CreatedAt, &a.UpdatedAt,
-		); err != nil {
+		a, err := scanAgent(rows)
+		if err != nil {
 			return nil, 0, fmt.Errorf("agent.List scan: %w", err)
 		}
 		list = append(list, a)
@@ -76,13 +81,15 @@ func (r *AgentRepo) List(ctx context.Context, limit, offset int) ([]*model.Agent
 func (r *AgentRepo) Update(ctx context.Context, a *model.Agent) error {
 	const q = `
 		UPDATE agent
-		SET name = $2, role = $3, agent_type = $4, specialization = $5, description = $6, reports_to = $7, status = $8,
-		    capabilities = $9, metadata = $10, updated_at = now()
+		SET name = $2, role = $3, role_code = $4, agent_type = $5, specialization = $6, description = $7,
+		    reports_to = $8, status = $9, managed_roles = $10, allowed_tools = $11, risk_level = $12,
+		    capabilities = $13, metadata = $14, updated_at = now()
 		WHERE id = $1
 		RETURNING updated_at`
 	return r.db.QueryRowContext(ctx, q,
-		a.ID, a.Name, a.Role, a.AgentType, a.Specialization, a.Description, a.ReportsTo,
-		a.Status, a.Capabilities, a.Metadata,
+		a.ID, a.Name, a.Role, a.RoleCode, a.AgentType, a.Specialization, a.Description,
+		a.ReportsTo, a.Status, a.ManagedRoles, a.AllowedTools, a.RiskLevel,
+		a.Capabilities, a.Metadata,
 	).Scan(&a.UpdatedAt)
 }
 
@@ -93,9 +100,7 @@ func (r *AgentRepo) Delete(ctx context.Context, id string) error {
 
 // GetSubordinates returns all agents that directly report to the given agent.
 func (r *AgentRepo) GetSubordinates(ctx context.Context, agentID string) ([]*model.Agent, error) {
-	const q = `
-		SELECT id, name, role, agent_type, specialization, description, reports_to, status, capabilities, metadata, created_at, updated_at
-		FROM agent WHERE reports_to = $1 ORDER BY created_at`
+	q := `SELECT ` + agentColumns + ` FROM agent WHERE reports_to = $1 ORDER BY created_at`
 	rows, err := r.db.QueryContext(ctx, q, agentID)
 	if err != nil {
 		return nil, fmt.Errorf("agent.GetSubordinates: %w", err)
@@ -104,11 +109,8 @@ func (r *AgentRepo) GetSubordinates(ctx context.Context, agentID string) ([]*mod
 
 	var list []*model.Agent
 	for rows.Next() {
-		a := &model.Agent{}
-		if err := rows.Scan(
-			&a.ID, &a.Name, &a.Role, &a.AgentType, &a.Specialization, &a.Description, &a.ReportsTo,
-			&a.Status, &a.Capabilities, &a.Metadata, &a.CreatedAt, &a.UpdatedAt,
-		); err != nil {
+		a, err := scanAgent(rows)
+		if err != nil {
 			return nil, fmt.Errorf("agent.GetSubordinates scan: %w", err)
 		}
 		list = append(list, a)
@@ -125,26 +127,28 @@ func (r *AgentRepo) GetOrgTree(ctx context.Context, rootID string) ([]*model.Age
 	if rootID != "" {
 		q = `
 			WITH RECURSIVE tree AS (
-				SELECT id, name, role, agent_type, specialization, description, reports_to, status, capabilities, metadata, created_at, updated_at, 0 AS depth
+				SELECT ` + agentColumns + `, 0 AS depth
 				FROM agent WHERE id = $1
 				UNION ALL
-				SELECT a.id, a.name, a.role, a.agent_type, a.specialization, a.description, a.reports_to, a.status, a.capabilities, a.metadata, a.created_at, a.updated_at, t.depth + 1
+				SELECT a.id, a.name, a.role, a.role_code, a.agent_type, a.specialization, a.description, a.reports_to, a.status,
+				       a.managed_roles, a.allowed_tools, a.risk_level, a.capabilities, a.metadata, a.created_at, a.updated_at,
+				       t.depth + 1
 				FROM agent a INNER JOIN tree t ON a.reports_to = t.id
 			)
-			SELECT id, name, role, agent_type, specialization, description, reports_to, status, capabilities, metadata, created_at, updated_at
-			FROM tree ORDER BY depth, created_at`
+			SELECT ` + agentColumns + ` FROM tree ORDER BY depth, created_at`
 		args = []interface{}{rootID}
 	} else {
 		q = `
 			WITH RECURSIVE tree AS (
-				SELECT id, name, role, agent_type, specialization, description, reports_to, status, capabilities, metadata, created_at, updated_at, 0 AS depth
+				SELECT ` + agentColumns + `, 0 AS depth
 				FROM agent WHERE reports_to IS NULL
 				UNION ALL
-				SELECT a.id, a.name, a.role, a.agent_type, a.specialization, a.description, a.reports_to, a.status, a.capabilities, a.metadata, a.created_at, a.updated_at, t.depth + 1
+				SELECT a.id, a.name, a.role, a.role_code, a.agent_type, a.specialization, a.description, a.reports_to, a.status,
+				       a.managed_roles, a.allowed_tools, a.risk_level, a.capabilities, a.metadata, a.created_at, a.updated_at,
+				       t.depth + 1
 				FROM agent a INNER JOIN tree t ON a.reports_to = t.id
 			)
-			SELECT id, name, role, agent_type, specialization, description, reports_to, status, capabilities, metadata, created_at, updated_at
-			FROM tree ORDER BY depth, created_at`
+			SELECT ` + agentColumns + ` FROM tree ORDER BY depth, created_at`
 	}
 
 	rows, err := r.db.QueryContext(ctx, q, args...)
@@ -155,11 +159,8 @@ func (r *AgentRepo) GetOrgTree(ctx context.Context, rootID string) ([]*model.Age
 
 	var list []*model.Agent
 	for rows.Next() {
-		a := &model.Agent{}
-		if err := rows.Scan(
-			&a.ID, &a.Name, &a.Role, &a.AgentType, &a.Specialization, &a.Description, &a.ReportsTo,
-			&a.Status, &a.Capabilities, &a.Metadata, &a.CreatedAt, &a.UpdatedAt,
-		); err != nil {
+		a, err := scanAgent(rows)
+		if err != nil {
 			return nil, fmt.Errorf("agent.GetOrgTree scan: %w", err)
 		}
 		list = append(list, a)
@@ -170,22 +171,34 @@ func (r *AgentRepo) GetOrgTree(ctx context.Context, rootID string) ([]*model.Age
 // FindByRoleAndSpec finds the first active agent matching role and specialization.
 // If no exact specialization match is found, falls back to a "general" specialization agent.
 func (r *AgentRepo) FindByRoleAndSpec(ctx context.Context, role model.AgentRole, spec model.AgentSpecialization) (*model.Agent, error) {
-	const q = `
-		SELECT id, name, role, agent_type, specialization, description, reports_to, status, capabilities, metadata, created_at, updated_at
+	q := `SELECT ` + agentColumns + `
 		FROM agent
 		WHERE role = $1 AND status = 'active' AND specialization IN ($2, 'general')
 		ORDER BY CASE WHEN specialization = $2 THEN 0 ELSE 1 END, created_at
 		LIMIT 1`
-	a := &model.Agent{}
-	err := r.db.QueryRowContext(ctx, q, role, spec).Scan(
-		&a.ID, &a.Name, &a.Role, &a.AgentType, &a.Specialization, &a.Description, &a.ReportsTo,
-		&a.Status, &a.Capabilities, &a.Metadata, &a.CreatedAt, &a.UpdatedAt,
-	)
+	a, err := scanAgent(r.db.QueryRowContext(ctx, q, role, spec))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("agent.FindByRoleAndSpec: %w", err)
+	}
+	return a, nil
+}
+
+// FindByRoleCode finds the first active agent matching a specific role_code.
+func (r *AgentRepo) FindByRoleCode(ctx context.Context, roleCode model.RoleCode) (*model.Agent, error) {
+	q := `SELECT ` + agentColumns + `
+		FROM agent
+		WHERE role_code = $1 AND status = 'active'
+		ORDER BY created_at
+		LIMIT 1`
+	a, err := scanAgent(r.db.QueryRowContext(ctx, q, roleCode))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("agent.FindByRoleCode: %w", err)
 	}
 	return a, nil
 }

@@ -250,24 +250,69 @@ func (e *Engine) runPhase(ctx context.Context, rc *runCtx, proj *model.Project, 
 }
 
 // runTaskChain executes Supervisor → Worker → Reviewer for a single task.
+// If review returns needs_revision, the chain loops back to the supervisor for rework.
+const maxReworkAttempts = 3
+
 func (e *Engine) runTaskChain(ctx context.Context, rc *runCtx, proj *model.Project, phase *model.Phase, task *model.Task) error {
 	if err := e.runSupervisor(ctx, rc, proj, phase, task); err != nil {
 		return err
 	}
 
-	if err := e.runWorker(ctx, rc, proj, phase, task); err != nil {
-		return err
+	for attempt := 0; attempt <= maxReworkAttempts; attempt++ {
+		if err := e.runWorker(ctx, rc, proj, phase, task); err != nil {
+			return err
+		}
+
+		if err := e.runReviewer(ctx, rc, proj, phase, task); err != nil {
+			return err
+		}
+
+		// Reload task status after review
+		fresh, err := e.services.Task.GetByID(ctx, task.ID)
+		if err != nil {
+			return fmt.Errorf("reload task after review: %w", err)
+		}
+		if fresh == nil {
+			return fmt.Errorf("task %s disappeared after review", task.ID)
+		}
+		*task = *fresh
+
+		if task.Status != model.TaskStatusRevisionRequired {
+			return nil // completed or other terminal state
+		}
+
+		// Rework: route back to owner supervisor
+		e.logger.Info("rework triggered", "task", task.Title, "attempt", attempt+1)
+		e.services.Audit.LogEvent(ctx, "system", "", "task.rework",
+			fmt.Sprintf("任务「%s」评审打回，第 %d 次返工，回到责任主管", task.Title, attempt+1),
+			"task", task.ID, nil, map[string]string{
+				"attempt":              fmt.Sprintf("%d", attempt+1),
+				"owner_supervisor_id":  stringOrEmpty(task.OwnerSupervisorID),
+			})
+
+		// Transition back to assigned for the rework cycle
+		_ = e.services.Task.TransitionStatus(ctx, task.ID, model.TaskStatusInProgress)
 	}
 
-	if err := e.runReviewer(ctx, rc, proj, phase, task); err != nil {
-		return err
-	}
+	e.logger.Warn("max rework attempts reached", "task", task.Title)
+	return fmt.Errorf("task %q exceeded max rework attempts (%d)", task.Title, maxReworkAttempts)
+}
 
-	return nil
+func stringOrEmpty(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 func (e *Engine) runSupervisor(ctx context.Context, rc *runCtx, proj *model.Project, phase *model.Phase, task *model.Task) error {
-	step, err := e.workflow.AddStep(ctx, rc.run.ID, fmt.Sprintf("主管规划「%s」", task.Title), "supervisor", rc.nextOrder())
+	// Infer and persist execution domain if not already set
+	domain := inferExecutionDomain(task)
+	if task.ExecutionDomain != domain {
+		task.ExecutionDomain = domain
+	}
+
+	step, err := e.workflow.AddStep(ctx, rc.run.ID, fmt.Sprintf("主管规划「%s」(%s)", task.Title, domain), "supervisor", rc.nextOrder())
 	if err != nil {
 		return err
 	}
@@ -277,12 +322,17 @@ func (e *Engine) runSupervisor(ctx context.Context, rc *runCtx, proj *model.Proj
 	step.TaskID = &task.ID
 	step.PhaseID = &phase.ID
 
-	agent, err := e.findAgent(ctx, model.AgentRoleSupervisor)
+	// Route to the correct supervisor by domain
+	agent, err := e.findSupervisorByDomain(ctx, domain)
 	if err != nil {
 		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
 	}
 	step.AgentID = &agent.ID
+
+	// Record owner supervisor on task
+	task.OwnerSupervisorID = &agent.ID
+	_ = e.services.Task.Update(ctx, task)
 
 	runner, err := e.registry.Get("supervisor")
 	if err != nil {
@@ -470,6 +520,8 @@ func (e *Engine) processTaskActions(ctx context.Context, projectID string, phase
 			Priority:    a.Priority,
 			Status:      model.TaskStatusPending,
 		}
+		// Infer execution domain from task content
+		task.ExecutionDomain = inferExecutionDomain(task)
 		if err := e.services.Task.Create(ctx, task); err != nil {
 			e.logger.Error("create task failed", "title", a.Title, "error", err)
 			return err
@@ -628,6 +680,57 @@ func (e *Engine) findAgentWithSpec(ctx context.Context, role model.AgentRole, sp
 		}
 	}
 	return nil, fmt.Errorf("no active agent with role %q (specialization %q) found", role, spec)
+}
+
+// findSupervisorByDomain locates the correct supervisor for a task's execution domain.
+// Falls back to findAgent(supervisor) for backward compatibility.
+func (e *Engine) findSupervisorByDomain(ctx context.Context, domain model.ExecutionDomain) (*model.Agent, error) {
+	var roleCode model.RoleCode
+	switch domain {
+	case model.ExecDomainDevelopment:
+		roleCode = model.RoleCodeDevelopmentSupervisor
+	case model.ExecDomainQA:
+		roleCode = model.RoleCodeQASupervisor
+	default:
+		// general → fall back to any supervisor
+		return e.findAgent(ctx, model.AgentRoleSupervisor)
+	}
+	agent, err := e.services.Agent.FindByRoleCode(ctx, roleCode)
+	if err != nil {
+		return nil, fmt.Errorf("find supervisor by domain (%s): %w", domain, err)
+	}
+	if agent != nil {
+		return agent, nil
+	}
+	// Fallback: any supervisor
+	e.logger.Warn("no supervisor with role_code, falling back", "role_code", roleCode)
+	return e.findAgent(ctx, model.AgentRoleSupervisor)
+}
+
+// inferExecutionDomain determines the task's execution domain from its content.
+// If the task already has a non-empty domain set, it is preserved.
+func inferExecutionDomain(task *model.Task) model.ExecutionDomain {
+	if task.ExecutionDomain != "" && task.ExecutionDomain != model.ExecDomainGeneral {
+		return task.ExecutionDomain
+	}
+	combined := task.Title + " " + task.Description
+
+	qaKeywords := []string{"测试", "验证", "回归", "QA", "test", "质量", "评审"}
+	for _, w := range qaKeywords {
+		if containsCI(combined, w) {
+			return model.ExecDomainQA
+		}
+	}
+
+	devKeywords := []string{"API", "接口", "后端", "前端", "页面", "组件", "数据库",
+		"migration", "服务端", "handler", "repository", "React", "Next.js", "实现", "开发"}
+	for _, w := range devKeywords {
+		if containsCI(combined, w) {
+			return model.ExecDomainDevelopment
+		}
+	}
+
+	return model.ExecDomainGeneral
 }
 
 // inferSpecialization determines the best worker specialization based on task content.

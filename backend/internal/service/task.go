@@ -37,6 +37,9 @@ func (s *TaskService) Create(ctx context.Context, t *model.Task) error {
 	if t.Status == "" {
 		t.Status = model.TaskStatusPending
 	}
+	if t.ExecutionDomain == "" {
+		t.ExecutionDomain = model.ExecDomainGeneral
+	}
 	if len(t.InputContext) == 0 {
 		t.InputContext = model.JSON("{}")
 	}
