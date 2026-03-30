@@ -8,8 +8,18 @@ import (
 	"github.com/lingchou/lingchoubot/backend/internal/repository"
 )
 
+// taskRepo defines the repository methods TaskService depends on.
+type taskRepo interface {
+	Create(ctx context.Context, t *model.Task) error
+	GetByID(ctx context.Context, id string) (*model.Task, error)
+	List(ctx context.Context, p repository.TaskListParams) ([]*model.Task, int, error)
+	Update(ctx context.Context, t *model.Task) error
+	UpdateStatus(ctx context.Context, id string, status model.TaskStatus) error
+	Delete(ctx context.Context, id string) error
+}
+
 type TaskService struct {
-	repo  *repository.TaskRepo
+	repo  taskRepo
 	audit *AuditService
 }
 

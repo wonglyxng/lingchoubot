@@ -15,7 +15,7 @@ import (
 var (
 	baseURL string
 	apiKey  string
-	client  = &http.Client{Timeout: 30 * time.Second}
+	client  = &http.Client{Timeout: 60 * time.Second}
 	verbose bool
 )
 
@@ -73,6 +73,11 @@ func main() {
 	runStatus := getString(run, "status")
 	runSummary := getString(run, "summary")
 	steps := getArray(run, "steps")
+	if runStatus == "failed" {
+		errMsg := getString(run, "error")
+		fmt.Printf("  ⚠ 工作流执行失败: %s\n", errMsg)
+		fatal("工作流编排失败，无法继续 Demo")
+	}
 	printOK("工作流完成: 状态=%s, 步骤数=%d", runStatus, len(steps))
 	if runSummary != "" {
 		fmt.Printf("  摘要: %s\n", runSummary)
@@ -422,10 +427,33 @@ func mustStartWorkflow(projectID string) map[string]any {
 		fatal("启动工作流失败: %v", result)
 	}
 	data := getMap(result, "data")
-	if data != nil {
-		return data
+	if data == nil {
+		fatal("启动工作流响应缺少 data")
 	}
-	return result
+
+	runID := getString(data, "id")
+	status := getString(data, "status")
+	fmt.Printf("  ✓ 工作流已启动: %s (状态: %s)\n", short(runID), status)
+
+	// 异步模式：轮询等待完成
+	if status == "running" || status == "pending" {
+		fmt.Printf("  ⏳ 等待工作流异步执行完成...\n")
+		maxWait := 120 // 最多等待 120 秒
+		pollInterval := 2
+		for waited := 0; waited < maxWait; waited += pollInterval {
+			time.Sleep(time.Duration(pollInterval) * time.Second)
+			polled := mustGet(fmt.Sprintf("/api/v1/orchestrator/runs/%s", runID))
+			status = getString(polled, "status")
+			steps := getArray(polled, "steps")
+			fmt.Printf("  ⏳ [%ds] 状态: %s, 步骤: %d\n", waited+pollInterval, status, len(steps))
+			if status == "completed" || status == "failed" {
+				return polled
+			}
+		}
+		fatal("工作流执行超时（%d 秒），最终状态: %s", maxWait, status)
+	}
+
+	return data
 }
 
 func mustListItems(label, method, path string) []any {
