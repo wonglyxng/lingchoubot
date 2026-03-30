@@ -85,12 +85,46 @@ Temporal Workflow: ProjectWorkflow
 
 ### 3.3 配置模型
 
+**全局 LLM 配置：**
+
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
 | `LLM_ENABLED` | `false` | 启用 LLM Agent |
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | LLM API 基础 URL |
 | `LLM_API_KEY` | （空） | LLM API 密钥 |
 | `LLM_MODEL` | `gpt-4o-mini` | 模型名称 |
+
+**按角色覆盖 LLM 配置（可选，留空则回退全局配置）：**
+
+每个角色支持 `BASE_URL`、`API_KEY`、`MODEL` 三项独立覆盖，通过 `LLM_{ROLE}_*` 环境变量设置：
+
+| 环境变量前缀 | 对应角色 | 示例 |
+|-------------|---------|------|
+| `LLM_PM_` | PM（项目经理） | `LLM_PM_MODEL=gpt-4o` |
+| `LLM_SUPERVISOR_` | Supervisor（主管） | `LLM_SUPERVISOR_MODEL=gpt-4o` |
+| `LLM_WORKER_` | Worker（执行者，含 backend/frontend/qa 专长） | `LLM_WORKER_MODEL=deepseek-chat` |
+| `LLM_REVIEWER_` | Reviewer（评审员） | `LLM_REVIEWER_MODEL=claude-3-haiku` |
+
+典型场景：PM 用强模型做项目分解，Worker 用便宜模型做执行：
+
+```env
+LLM_ENABLED=true
+LLM_API_KEY=sk-global-key
+LLM_MODEL=gpt-4o-mini
+
+# PM 用更强模型
+LLM_PM_MODEL=gpt-4o
+
+# Worker 用 DeepSeek
+LLM_WORKER_BASE_URL=https://api.deepseek.com/v1
+LLM_WORKER_API_KEY=sk-deepseek-xxx
+LLM_WORKER_MODEL=deepseek-chat
+```
+
+**Temporal 配置：**
+
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
 | `TEMPORAL_ENABLED` | `false` | 启用 Temporal 编排 |
 | `TEMPORAL_HOST_PORT` | `localhost:7233` | Temporal gRPC 地址 |
 | `TEMPORAL_NAMESPACE` | `default` | Temporal 命名空间 |
