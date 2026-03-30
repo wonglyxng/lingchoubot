@@ -17,6 +17,19 @@ type TemporalWorkerConfig struct {
 	TaskQueue string
 }
 
+// DialTemporal creates a Temporal client without starting a worker.
+// Used when the API process dispatches to an external worker process.
+func DialTemporal(cfg TemporalWorkerConfig) (client.Client, error) {
+	c, err := client.Dial(client.Options{
+		HostPort:  cfg.HostPort,
+		Namespace: cfg.Namespace,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("dial Temporal: %w", err)
+	}
+	return c, nil
+}
+
 // StartTemporalWorker creates a Temporal client, registers the workflow and activities,
 // and starts the worker. Returns the client (for shutdown) and any error.
 func StartTemporalWorker(
@@ -52,6 +65,7 @@ func StartTemporalWorker(
 	w.RegisterActivity(acts.ActivitySupervisor)
 	w.RegisterActivity(acts.ActivityWorker)
 	w.RegisterActivity(acts.ActivityReviewer)
+	w.RegisterActivity(acts.ActivityCheckRework)
 	w.RegisterActivity(acts.ActivityCompleteRun)
 	w.RegisterActivity(acts.ActivityFailRun)
 

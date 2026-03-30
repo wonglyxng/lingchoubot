@@ -85,6 +85,15 @@ func (s *WorkflowService) FailRun(ctx context.Context, run *model.WorkflowRun, e
 	return s.runRepo.UpdateStatus(ctx, run)
 }
 
+// CancelRun marks a run as cancelled.
+func (s *WorkflowService) CancelRun(ctx context.Context, run *model.WorkflowRun) error {
+	now := time.Now()
+	run.Status = model.WorkflowRunCancelled
+	run.Error = "cancelled by user"
+	run.CompletedAt = &now
+	return s.runRepo.UpdateStatus(ctx, run)
+}
+
 // AddStep creates a new step in the "pending" state.
 func (s *WorkflowService) AddStep(ctx context.Context, runID string, name, agentRole string, sortOrder int) (*model.WorkflowStep, error) {
 	step := &model.WorkflowStep{

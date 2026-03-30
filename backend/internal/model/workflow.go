@@ -10,6 +10,7 @@ const (
 	WorkflowRunRunning   WorkflowRunStatus = "running"
 	WorkflowRunCompleted WorkflowRunStatus = "completed"
 	WorkflowRunFailed    WorkflowRunStatus = "failed"
+	WorkflowRunCancelled WorkflowRunStatus = "cancelled"
 )
 
 // WorkflowStepStatus represents the state of a single step within a run.

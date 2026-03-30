@@ -16,7 +16,8 @@ type ProjectWorkflowInput struct {
 
 // PMActivityResult carries the phase/task IDs created during the PM step.
 type PMActivityResult struct {
-	PhaseIDs []string `json:"phase_ids"`
+	PhaseIDs  []string `json:"phase_ids"`
+	StepCount int      `json:"step_count"` // running step counter for subsequent activities
 }
 
 // PhaseTasksResult lists tasks within a phase.
@@ -26,7 +27,8 @@ type PhaseTasksResult struct {
 
 // StepResult is a generic result from an activity step.
 type StepResult struct {
-	Summary string `json:"summary"`
+	Summary   string `json:"summary"`
+	StepCount int    `json:"step_count"` // updated step counter
 }
 
 // ProjectWorkflow is the top-level Temporal workflow that orchestrates
@@ -43,17 +45,19 @@ func ProjectWorkflow(ctx workflow.Context, input ProjectWorkflowInput) error {
 	}
 	ctx = workflow.WithActivityOptions(ctx, ao)
 
+	stepCount := 0
+
 	// Step 1: PM decomposes the project
 	var pmResult PMActivityResult
 	err := workflow.ExecuteActivity(ctx, "ActivityPM", input).Get(ctx, &pmResult)
 	if err != nil {
-		// Mark run as failed
 		_ = workflow.ExecuteActivity(ctx, "ActivityFailRun", FailRunInput{
 			RunID: input.RunID,
 			Error: fmt.Sprintf("PM activity failed: %s", err.Error()),
 		}).Get(ctx, nil)
 		return err
 	}
+	stepCount = pmResult.StepCount
 
 	// Step 2: For each phase, get tasks and run the chain
 	for _, phaseID := range pmResult.PhaseIDs {
@@ -67,21 +71,51 @@ func ProjectWorkflow(ctx workflow.Context, input ProjectWorkflowInput) error {
 
 		for _, taskID := range tasksResult.TaskIDs {
 			chainInput := TaskChainInput{
-				RunID:     input.RunID,
-				ProjectID: input.ProjectID,
-				PhaseID:   phaseID,
-				TaskID:    taskID,
+				RunID:      input.RunID,
+				ProjectID:  input.ProjectID,
+				PhaseID:    phaseID,
+				TaskID:     taskID,
+				SortOffset: stepCount,
 			}
 
 			// Supervisor
-			var stepResult StepResult
-			_ = workflow.ExecuteActivity(ctx, "ActivitySupervisor", chainInput).Get(ctx, &stepResult)
+			var supResult StepResult
+			err = workflow.ExecuteActivity(ctx, "ActivitySupervisor", chainInput).Get(ctx, &supResult)
+			if err == nil {
+				stepCount = supResult.StepCount
+				chainInput.SortOffset = stepCount
+			}
 
-			// Worker
-			_ = workflow.ExecuteActivity(ctx, "ActivityWorker", chainInput).Get(ctx, &stepResult)
+			// Worker → Reviewer with rework loop
+			const maxReworkAttempts = 3
+			for attempt := 0; attempt <= maxReworkAttempts; attempt++ {
+				// Worker
+				var workerResult StepResult
+				chainInput.SortOffset = stepCount
+				err = workflow.ExecuteActivity(ctx, "ActivityWorker", chainInput).Get(ctx, &workerResult)
+				if err == nil {
+					stepCount = workerResult.StepCount
+					chainInput.SortOffset = stepCount
+				}
 
-			// Reviewer
-			_ = workflow.ExecuteActivity(ctx, "ActivityReviewer", chainInput).Get(ctx, &stepResult)
+				// Reviewer
+				var reviewResult StepResult
+				err = workflow.ExecuteActivity(ctx, "ActivityReviewer", chainInput).Get(ctx, &reviewResult)
+				if err == nil {
+					stepCount = reviewResult.StepCount
+					chainInput.SortOffset = stepCount
+				}
+
+				// Check if rework needed
+				var needsRework bool
+				checkErr := workflow.ExecuteActivity(ctx, "ActivityCheckRework", CheckReworkInput{
+					TaskID:  taskID,
+					Attempt: attempt + 1,
+				}).Get(ctx, &needsRework)
+				if checkErr != nil || !needsRework {
+					break
+				}
+			}
 		}
 	}
 
@@ -101,10 +135,11 @@ type ListPhaseTasksInput struct {
 }
 
 type TaskChainInput struct {
-	RunID     string `json:"run_id"`
-	ProjectID string `json:"project_id"`
-	PhaseID   string `json:"phase_id"`
-	TaskID    string `json:"task_id"`
+	RunID      string `json:"run_id"`
+	ProjectID  string `json:"project_id"`
+	PhaseID    string `json:"phase_id"`
+	TaskID     string `json:"task_id"`
+	SortOffset int    `json:"sort_offset"` // base sort_order for steps in this chain
 }
 
 type FailRunInput struct {
@@ -115,4 +150,9 @@ type FailRunInput struct {
 type CompleteRunInput struct {
 	RunID     string `json:"run_id"`
 	ProjectID string `json:"project_id"`
+}
+
+type CheckReworkInput struct {
+	TaskID  string `json:"task_id"`
+	Attempt int    `json:"attempt"`
 }

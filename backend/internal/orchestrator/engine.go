@@ -60,6 +60,23 @@ func (e *Engine) ListRuns(ctx context.Context, p repository.WorkflowRunListParam
 	return e.workflow.ListRuns(ctx, p)
 }
 
+// CancelRun marks a workflow run as cancelled.
+// For the local engine, this updates the DB record; the goroutine will not be interrupted
+// but will notice the status on next step boundary.
+func (e *Engine) CancelRun(ctx context.Context, id string) error {
+	run, err := e.workflow.GetRun(ctx, id)
+	if err != nil {
+		return fmt.Errorf("get run: %w", err)
+	}
+	if run == nil {
+		return fmt.Errorf("run %s not found", id)
+	}
+	if run.Status != model.WorkflowRunRunning {
+		return fmt.Errorf("run %s is not running (status=%s)", id, run.Status)
+	}
+	return e.workflow.CancelRun(ctx, run)
+}
+
 // Run executes the full workflow for a project: PM → Supervisor → Worker → Reviewer.
 // This is a synchronous call — use RunAsync for non-blocking execution.
 func (e *Engine) Run(ctx context.Context, projectID string) (*model.WorkflowRun, error) {
@@ -286,8 +303,8 @@ func (e *Engine) runTaskChain(ctx context.Context, rc *runCtx, proj *model.Proje
 		e.services.Audit.LogEvent(ctx, "system", "", "task.rework",
 			fmt.Sprintf("任务「%s」评审打回，第 %d 次返工，回到责任主管", task.Title, attempt+1),
 			"task", task.ID, nil, map[string]string{
-				"attempt":              fmt.Sprintf("%d", attempt+1),
-				"owner_supervisor_id":  stringOrEmpty(task.OwnerSupervisorID),
+				"attempt":             fmt.Sprintf("%d", attempt+1),
+				"owner_supervisor_id": stringOrEmpty(task.OwnerSupervisorID),
 			})
 
 		// Transition back to assigned for the rework cycle

@@ -177,3 +177,66 @@ func TestStringOrEmpty(t *testing.T) {
 		t.Errorf("stringOrEmpty(nil) = %q, want empty", got)
 	}
 }
+
+func TestWorkflowRunStatusConstants(t *testing.T) {
+	tests := []struct {
+		s    model.WorkflowRunStatus
+		want string
+	}{
+		{model.WorkflowRunPending, "pending"},
+		{model.WorkflowRunRunning, "running"},
+		{model.WorkflowRunCompleted, "completed"},
+		{model.WorkflowRunFailed, "failed"},
+		{model.WorkflowRunCancelled, "cancelled"},
+	}
+	for _, tt := range tests {
+		if string(tt.s) != tt.want {
+			t.Errorf("WorkflowRunStatus = %q, want %q", tt.s, tt.want)
+		}
+	}
+}
+
+func TestWorkflowStepStatusConstants(t *testing.T) {
+	tests := []struct {
+		s    model.WorkflowStepStatus
+		want string
+	}{
+		{model.WorkflowStepPending, "pending"},
+		{model.WorkflowStepRunning, "running"},
+		{model.WorkflowStepCompleted, "completed"},
+		{model.WorkflowStepFailed, "failed"},
+		{model.WorkflowStepSkipped, "skipped"},
+	}
+	for _, tt := range tests {
+		if string(tt.s) != tt.want {
+			t.Errorf("WorkflowStepStatus = %q, want %q", tt.s, tt.want)
+		}
+	}
+}
+
+func TestCheckReworkInputType(t *testing.T) {
+	// Verify the CheckReworkInput type is well-formed
+	input := CheckReworkInput{
+		TaskID:  "task-123",
+		Attempt: 2,
+	}
+	if input.TaskID != "task-123" {
+		t.Errorf("expected task-123, got %s", input.TaskID)
+	}
+	if input.Attempt != 2 {
+		t.Errorf("expected attempt 2, got %d", input.Attempt)
+	}
+}
+
+func TestTaskChainInputSortOffset(t *testing.T) {
+	input := TaskChainInput{
+		RunID:      "run-1",
+		ProjectID:  "proj-1",
+		PhaseID:    "phase-1",
+		TaskID:     "task-1",
+		SortOffset: 5,
+	}
+	if input.SortOffset != 5 {
+		t.Errorf("expected sort_offset 5, got %d", input.SortOffset)
+	}
+}

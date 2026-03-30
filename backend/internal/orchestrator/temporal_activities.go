@@ -20,6 +20,36 @@ type Activities struct {
 	Logger   *slog.Logger
 }
 
+// stepTracker is used in Temporal activities to create and manage workflow_step records.
+type stepTracker struct {
+	workflow *service.WorkflowService
+	runID    string
+	step     *model.WorkflowStep
+}
+
+func (a *Activities) newStep(ctx context.Context, runID, name, agentRole string, sortOrder int) (*stepTracker, error) {
+	step, err := a.Workflow.AddStep(ctx, runID, name, agentRole, sortOrder)
+	if err != nil {
+		return nil, fmt.Errorf("add workflow step: %w", err)
+	}
+	if err := a.Workflow.StartStep(ctx, step); err != nil {
+		return nil, fmt.Errorf("start workflow step: %w", err)
+	}
+	return &stepTracker{workflow: a.Workflow, runID: runID, step: step}, nil
+}
+
+func (st *stepTracker) complete(ctx context.Context, summary string) {
+	_ = st.workflow.CompleteStep(ctx, st.step, summary)
+}
+
+func (st *stepTracker) fail(ctx context.Context, errMsg string) {
+	_ = st.workflow.FailStep(ctx, st.step, errMsg)
+}
+
+func (st *stepTracker) setAgent(id string) { st.step.AgentID = &id }
+func (st *stepTracker) setTask(id string)  { st.step.TaskID = &id }
+func (st *stepTracker) setPhase(id string) { st.step.PhaseID = &id }
+
 // ActivityPM runs the PM agent to decompose a project into phases and tasks.
 func (a *Activities) ActivityPM(ctx context.Context, input ProjectWorkflowInput) (*PMActivityResult, error) {
 	proj, err := a.Services.Project.GetByID(ctx, input.ProjectID)
@@ -27,13 +57,21 @@ func (a *Activities) ActivityPM(ctx context.Context, input ProjectWorkflowInput)
 		return nil, fmt.Errorf("get project: %w", err)
 	}
 
-	agent, err := a.findAgent(ctx, model.AgentRolePM)
+	st, err := a.newStep(ctx, input.RunID, "PM 项目分解", "pm", 1)
 	if err != nil {
 		return nil, err
 	}
 
+	agent, err := a.findAgent(ctx, model.AgentRolePM)
+	if err != nil {
+		st.fail(ctx, err.Error())
+		return nil, err
+	}
+	st.setAgent(agent.ID)
+
 	runner, err := a.Registry.Get("pm")
 	if err != nil {
+		st.fail(ctx, err.Error())
 		return nil, err
 	}
 
@@ -47,9 +85,11 @@ func (a *Activities) ActivityPM(ctx context.Context, input ProjectWorkflowInput)
 
 	output, err := runner.Execute(taskInput)
 	if err != nil {
+		st.fail(ctx, err.Error())
 		return nil, fmt.Errorf("PM agent execution failed: %w", err)
 	}
 	if output.Status == runtime.OutputStatusFailed {
+		st.fail(ctx, output.Error)
 		return nil, fmt.Errorf("PM agent returned failure: %s", output.Error)
 	}
 
@@ -64,6 +104,7 @@ func (a *Activities) ActivityPM(ctx context.Context, input ProjectWorkflowInput)
 		}
 		if err := a.Services.Phase.Create(ctx, phase); err != nil {
 			a.Logger.Error("create phase failed", "name", pa.Name, "error", err)
+			st.fail(ctx, err.Error())
 			return nil, err
 		}
 	}
@@ -89,18 +130,24 @@ func (a *Activities) ActivityPM(ctx context.Context, input ProjectWorkflowInput)
 			Priority:    ta.Priority,
 			Status:      model.TaskStatusPending,
 		}
+		task.ExecutionDomain = inferExecutionDomain(task)
 		if err := a.Services.Task.Create(ctx, task); err != nil {
 			a.Logger.Error("create task failed", "title", ta.Title, "error", err)
+			st.fail(ctx, err.Error())
 			return nil, err
 		}
 	}
 
 	// Collect phase IDs for the workflow to iterate
-	result := &PMActivityResult{PhaseIDs: make([]string, 0, len(phases))}
+	result := &PMActivityResult{
+		PhaseIDs:  make([]string, 0, len(phases)),
+		StepCount: 1,
+	}
 	for _, p := range phases {
 		result.PhaseIDs = append(result.PhaseIDs, p.ID)
 	}
 
+	st.complete(ctx, output.Summary)
 	return result, nil
 }
 
@@ -132,13 +179,37 @@ func (a *Activities) ActivitySupervisor(ctx context.Context, input TaskChainInpu
 		return nil, fmt.Errorf("project or task not found")
 	}
 
-	agent, err := a.findAgent(ctx, model.AgentRoleSupervisor)
+	// Infer execution domain
+	domain := inferExecutionDomain(task)
+	if task.ExecutionDomain != domain {
+		task.ExecutionDomain = domain
+	}
+
+	sortOrder := input.SortOffset + 1
+	st, err := a.newStep(ctx, input.RunID, fmt.Sprintf("主管规划「%s」(%s)", task.Title, domain), "supervisor", sortOrder)
 	if err != nil {
 		return nil, err
 	}
+	st.setTask(task.ID)
+	if phase != nil {
+		st.setPhase(phase.ID)
+	}
+
+	// Route to correct supervisor by domain
+	agent, err := a.findSupervisorByDomain(ctx, domain)
+	if err != nil {
+		st.fail(ctx, err.Error())
+		return nil, err
+	}
+	st.setAgent(agent.ID)
+
+	// Record owner supervisor on task
+	task.OwnerSupervisorID = &agent.ID
+	_ = a.Services.Task.Update(ctx, task)
 
 	runner, err := a.Registry.Get("supervisor")
 	if err != nil {
+		st.fail(ctx, err.Error())
 		return nil, err
 	}
 
@@ -156,19 +227,21 @@ func (a *Activities) ActivitySupervisor(ctx context.Context, input TaskChainInpu
 
 	output, err := runner.Execute(taskInput)
 	if err != nil {
+		st.fail(ctx, err.Error())
 		return nil, err
 	}
 	if output.Status == runtime.OutputStatusFailed {
+		st.fail(ctx, output.Error)
 		return nil, fmt.Errorf("supervisor failed: %s", output.Error)
 	}
 
-	// Use the same Engine action processors via a temporary local engine
 	eng := &Engine{registry: a.Registry, services: a.Services, workflow: a.Workflow, logger: a.Logger}
 	eng.processContractActions(ctx, task.ID, output.Contracts)
 	eng.processAssignmentActions(ctx, task.ID, agent.ID, output.Assignments)
 	eng.processTransitionActions(ctx, task, output.Transitions)
 
-	return &StepResult{Summary: output.Summary}, nil
+	st.complete(ctx, output.Summary)
+	return &StepResult{Summary: output.Summary, StepCount: sortOrder}, nil
 }
 
 // ActivityWorker runs the Worker agent for a given task.
@@ -181,15 +254,30 @@ func (a *Activities) ActivityWorker(ctx context.Context, input TaskChainInput) (
 	}
 
 	spec := inferSpecialization(task)
-	agent, err := a.findAgentWithSpec(ctx, model.AgentRoleWorker, spec)
+	sortOrder := input.SortOffset + 1
+	stepName := fmt.Sprintf("执行「%s」", task.Title)
+	if spec != model.AgentSpecGeneral {
+		stepName = fmt.Sprintf("执行「%s」(%s)", task.Title, spec)
+	}
+
+	st, err := a.newStep(ctx, input.RunID, stepName, "worker", sortOrder)
 	if err != nil {
 		return nil, err
 	}
+	st.setTask(task.ID)
+
+	agent, err := a.findAgentWithSpec(ctx, model.AgentRoleWorker, spec)
+	if err != nil {
+		st.fail(ctx, err.Error())
+		return nil, err
+	}
+	st.setAgent(agent.ID)
 
 	_ = a.Services.Task.TransitionStatus(ctx, task.ID, model.TaskStatusInProgress)
 
 	runner, err := a.Registry.GetForSpec("worker", string(agent.Specialization))
 	if err != nil {
+		st.fail(ctx, err.Error())
 		return nil, err
 	}
 
@@ -211,9 +299,11 @@ func (a *Activities) ActivityWorker(ctx context.Context, input TaskChainInput) (
 
 	output, err := runner.Execute(taskInput)
 	if err != nil {
+		st.fail(ctx, err.Error())
 		return nil, err
 	}
 	if output.Status == runtime.OutputStatusFailed {
+		st.fail(ctx, output.Error)
 		return nil, fmt.Errorf("worker failed: %s", output.Error)
 	}
 
@@ -222,7 +312,8 @@ func (a *Activities) ActivityWorker(ctx context.Context, input TaskChainInput) (
 	eng.processHandoffActions(ctx, task.ID, agent.ID, output.Handoffs)
 	eng.processTransitionActions(ctx, task, output.Transitions)
 
-	return &StepResult{Summary: output.Summary}, nil
+	st.complete(ctx, output.Summary)
+	return &StepResult{Summary: output.Summary, StepCount: sortOrder}, nil
 }
 
 // ActivityReviewer runs the Reviewer agent for a given task.
@@ -234,13 +325,23 @@ func (a *Activities) ActivityReviewer(ctx context.Context, input TaskChainInput)
 		return nil, fmt.Errorf("project or task not found")
 	}
 
-	agent, err := a.findAgent(ctx, model.AgentRoleReviewer)
+	sortOrder := input.SortOffset + 1
+	st, err := a.newStep(ctx, input.RunID, fmt.Sprintf("评审「%s」", task.Title), "reviewer", sortOrder)
 	if err != nil {
 		return nil, err
 	}
+	st.setTask(task.ID)
+
+	agent, err := a.findAgent(ctx, model.AgentRoleReviewer)
+	if err != nil {
+		st.fail(ctx, err.Error())
+		return nil, err
+	}
+	st.setAgent(agent.ID)
 
 	runner, err := a.Registry.Get("reviewer")
 	if err != nil {
+		st.fail(ctx, err.Error())
 		return nil, err
 	}
 
@@ -255,16 +356,19 @@ func (a *Activities) ActivityReviewer(ctx context.Context, input TaskChainInput)
 
 	output, err := runner.Execute(taskInput)
 	if err != nil {
+		st.fail(ctx, err.Error())
 		return nil, err
 	}
 	if output.Status == runtime.OutputStatusFailed {
+		st.fail(ctx, output.Error)
 		return nil, fmt.Errorf("reviewer failed: %s", output.Error)
 	}
 
 	eng := &Engine{registry: a.Registry, services: a.Services, workflow: a.Workflow, logger: a.Logger}
 	eng.processReviewActions(ctx, task.ID, agent.ID, output.Reviews)
 
-	return &StepResult{Summary: output.Summary}, nil
+	st.complete(ctx, output.Summary)
+	return &StepResult{Summary: output.Summary, StepCount: sortOrder}, nil
 }
 
 // ActivityCompleteRun marks the workflow run as completed.
@@ -293,6 +397,27 @@ func (a *Activities) ActivityFailRun(ctx context.Context, input FailRunInput) er
 	return a.Workflow.FailRun(ctx, run, input.Error)
 }
 
+// ActivityCheckRework checks if a task needs rework after review.
+// Returns true if the task status is "revision_required" and rework should continue.
+func (a *Activities) ActivityCheckRework(ctx context.Context, input CheckReworkInput) (bool, error) {
+	task, err := a.Services.Task.GetByID(ctx, input.TaskID)
+	if err != nil {
+		return false, fmt.Errorf("get task for rework check: %w", err)
+	}
+	if task == nil {
+		return false, fmt.Errorf("task %s not found", input.TaskID)
+	}
+
+	if task.Status != model.TaskStatusRevisionRequired {
+		return false, nil
+	}
+
+	a.Logger.Info("rework triggered (Temporal)", "task", task.Title, "attempt", input.Attempt)
+	// Transition back to in_progress for the rework cycle
+	_ = a.Services.Task.TransitionStatus(ctx, task.ID, model.TaskStatusInProgress)
+	return true, nil
+}
+
 // --- Helpers ---
 
 func (a *Activities) findAgent(ctx context.Context, role model.AgentRole) (*model.Agent, error) {
@@ -318,4 +443,26 @@ func (a *Activities) findAgentWithSpec(ctx context.Context, role model.AgentRole
 		}
 	}
 	return nil, fmt.Errorf("no active agent with role %q (specialization %q) found", role, spec)
+}
+
+// findSupervisorByDomain locates the correct supervisor for a task's execution domain (Temporal mode).
+func (a *Activities) findSupervisorByDomain(ctx context.Context, domain model.ExecutionDomain) (*model.Agent, error) {
+	var roleCode model.RoleCode
+	switch domain {
+	case model.ExecDomainDevelopment:
+		roleCode = model.RoleCodeDevelopmentSupervisor
+	case model.ExecDomainQA:
+		roleCode = model.RoleCodeQASupervisor
+	default:
+		return a.findAgent(ctx, model.AgentRoleSupervisor)
+	}
+	agent, err := a.Services.Agent.FindByRoleCode(ctx, roleCode)
+	if err != nil {
+		return nil, fmt.Errorf("find supervisor by domain (%s): %w", domain, err)
+	}
+	if agent != nil {
+		return agent, nil
+	}
+	a.Logger.Warn("no supervisor with role_code, falling back", "role_code", roleCode)
+	return a.findAgent(ctx, model.AgentRoleSupervisor)
 }

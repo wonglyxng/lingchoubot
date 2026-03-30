@@ -1,0 +1,5 @@
+-- WP2-08: Add 'cancelled' status to workflow_run
+
+ALTER TABLE workflow_run DROP CONSTRAINT IF EXISTS workflow_run_status_check;
+ALTER TABLE workflow_run ADD CONSTRAINT workflow_run_status_check
+    CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled'));

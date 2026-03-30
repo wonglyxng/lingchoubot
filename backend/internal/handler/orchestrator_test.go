@@ -17,9 +17,10 @@ import (
 
 // mockWorkflowEngine implements orchestrator.WorkflowEngine for handler tests.
 type mockWorkflowEngine struct {
-	runAsyncFn func(ctx context.Context, projectID string) (*model.WorkflowRun, error)
-	getRunFn   func(ctx context.Context, id string) (*model.WorkflowRun, error)
-	listRunsFn func(ctx context.Context, params repository.WorkflowRunListParams) ([]*model.WorkflowRun, int, error)
+	runAsyncFn  func(ctx context.Context, projectID string) (*model.WorkflowRun, error)
+	getRunFn    func(ctx context.Context, id string) (*model.WorkflowRun, error)
+	listRunsFn  func(ctx context.Context, params repository.WorkflowRunListParams) ([]*model.WorkflowRun, int, error)
+	cancelRunFn func(ctx context.Context, id string) error
 }
 
 // Verify interface compliance
@@ -44,6 +45,13 @@ func (m *mockWorkflowEngine) ListRuns(ctx context.Context, params repository.Wor
 		return m.listRunsFn(ctx, params)
 	}
 	return nil, 0, fmt.Errorf("not implemented")
+}
+
+func (m *mockWorkflowEngine) CancelRun(ctx context.Context, id string) error {
+	if m.cancelRunFn != nil {
+		return m.cancelRunFn(ctx, id)
+	}
+	return fmt.Errorf("not implemented")
 }
 
 func TestOrchestratorHandler_StartRun_Success(t *testing.T) {
@@ -286,5 +294,56 @@ func TestOrchestratorHandler_ListRuns_Error(t *testing.T) {
 
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d", w.Code)
+	}
+}
+
+func TestOrchestratorHandler_CancelRun_Success(t *testing.T) {
+	engine := &mockWorkflowEngine{
+		cancelRunFn: func(ctx context.Context, id string) error {
+			if id != "run-001" {
+				t.Errorf("expected id 'run-001', got %q", id)
+			}
+			return nil
+		},
+	}
+
+	h := NewOrchestratorHandler(engine)
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/v1/orchestrator/runs/run-001/cancel", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp["success"] != true {
+		t.Errorf("expected success=true")
+	}
+}
+
+func TestOrchestratorHandler_CancelRun_Error(t *testing.T) {
+	engine := &mockWorkflowEngine{
+		cancelRunFn: func(ctx context.Context, id string) error {
+			return fmt.Errorf("run is not running")
+		},
+	}
+
+	h := NewOrchestratorHandler(engine)
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/v1/orchestrator/runs/run-001/cancel", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", w.Code, w.Body.String())
 	}
 }

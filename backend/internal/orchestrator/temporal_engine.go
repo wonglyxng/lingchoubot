@@ -73,3 +73,26 @@ func (te *TemporalEngine) GetRun(ctx context.Context, id string) (*model.Workflo
 func (te *TemporalEngine) ListRuns(ctx context.Context, p repository.WorkflowRunListParams) ([]*model.WorkflowRun, int, error) {
 	return te.workflow.ListRuns(ctx, p)
 }
+
+// CancelRun cancels a Temporal workflow and marks the run as cancelled in the database.
+func (te *TemporalEngine) CancelRun(ctx context.Context, id string) error {
+	run, err := te.workflow.GetRun(ctx, id)
+	if err != nil {
+		return fmt.Errorf("get run: %w", err)
+	}
+	if run == nil {
+		return fmt.Errorf("run %s not found", id)
+	}
+	if run.Status != model.WorkflowRunRunning {
+		return fmt.Errorf("run %s is not running (status=%s)", id, run.Status)
+	}
+
+	// Cancel the Temporal workflow
+	workflowID := fmt.Sprintf("lingchou-run-%s", run.ID)
+	if err := te.client.CancelWorkflow(ctx, workflowID, ""); err != nil {
+		te.logger.Error("cancel Temporal workflow failed", "workflow_id", workflowID, "error", err)
+		// Still mark as cancelled in our DB even if Temporal cancel fails
+	}
+
+	return te.workflow.CancelRun(ctx, run)
+}

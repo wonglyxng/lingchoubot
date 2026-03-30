@@ -48,10 +48,11 @@ func (c LLMConfig) ResolveForRole(role string) (baseURL, apiKey, model string) {
 }
 
 type TemporalConfig struct {
-	Enabled   bool
-	HostPort  string
-	Namespace string
-	TaskQueue string
+	Enabled        bool
+	HostPort       string
+	Namespace      string
+	TaskQueue      string
+	WorkerEmbedded bool // true = embed worker in API process (dev mode), false = separate worker process
 }
 
 type ServerConfig struct {
@@ -107,10 +108,11 @@ func Load() *Config {
 		},
 		LLM: loadLLMConfig(),
 		Temporal: TemporalConfig{
-			Enabled:   getEnv("TEMPORAL_ENABLED", "false") == "true",
-			HostPort:  getEnv("TEMPORAL_HOST_PORT", "localhost:7233"),
-			Namespace: getEnv("TEMPORAL_NAMESPACE", "default"),
-			TaskQueue: getEnv("TEMPORAL_TASK_QUEUE", "lingchou-orchestrator"),
+			Enabled:        getEnv("TEMPORAL_ENABLED", "false") == "true",
+			HostPort:       getEnv("TEMPORAL_HOST_PORT", "localhost:7233"),
+			Namespace:      getEnv("TEMPORAL_NAMESPACE", "default"),
+			TaskQueue:      getEnv("TEMPORAL_TASK_QUEUE", "lingchou-orchestrator"),
+			WorkerEmbedded: getEnv("TEMPORAL_WORKER_EMBEDDED", "true") == "true",
 		},
 	}
 }

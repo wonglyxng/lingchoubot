@@ -147,22 +147,38 @@ func main() {
 	var workflowEngine orchestrator.WorkflowEngine
 
 	if cfg.Temporal.Enabled {
-		temporalClient, err := orchestrator.StartTemporalWorker(
-			orchestrator.TemporalWorkerConfig{
-				HostPort:  cfg.Temporal.HostPort,
-				Namespace: cfg.Temporal.Namespace,
-				TaskQueue: cfg.Temporal.TaskQueue,
-			},
-			reg, orchServices, workflowSvc, logger,
-		)
-		if err != nil {
-			logger.Error("failed to start Temporal worker", "error", err)
-			os.Exit(1)
+		// Dial Temporal for the engine client
+		temporalClientOpts := orchestrator.TemporalWorkerConfig{
+			HostPort:  cfg.Temporal.HostPort,
+			Namespace: cfg.Temporal.Namespace,
+			TaskQueue: cfg.Temporal.TaskQueue,
 		}
-		defer temporalClient.Close()
 
-		workflowEngine = orchestrator.NewTemporalEngine(temporalClient, cfg.Temporal.TaskQueue, workflowSvc, logger)
-		logger.Info("Temporal workflow engine active", "host_port", cfg.Temporal.HostPort)
+		if cfg.Temporal.WorkerEmbedded {
+			// Embedded mode: start worker in the same process (dev convenience)
+			temporalClient, err := orchestrator.StartTemporalWorker(
+				temporalClientOpts, reg, orchServices, workflowSvc, logger,
+			)
+			if err != nil {
+				logger.Error("failed to start Temporal worker", "error", err)
+				os.Exit(1)
+			}
+			defer temporalClient.Close()
+
+			workflowEngine = orchestrator.NewTemporalEngine(temporalClient, cfg.Temporal.TaskQueue, workflowSvc, logger)
+			logger.Info("Temporal workflow engine active (embedded worker)", "host_port", cfg.Temporal.HostPort)
+		} else {
+			// Separate worker mode: only create the Temporal client for dispatching
+			tc, err := orchestrator.DialTemporal(temporalClientOpts)
+			if err != nil {
+				logger.Error("failed to dial Temporal", "error", err)
+				os.Exit(1)
+			}
+			defer tc.Close()
+
+			workflowEngine = orchestrator.NewTemporalEngine(tc, cfg.Temporal.TaskQueue, workflowSvc, logger)
+			logger.Info("Temporal workflow engine active (external worker)", "host_port", cfg.Temporal.HostPort)
+		}
 	} else {
 		engine := orchestrator.NewEngine(reg, orchServices, workflowSvc, logger)
 		workflowEngine = engine

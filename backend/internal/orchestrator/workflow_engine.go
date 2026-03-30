@@ -13,4 +13,5 @@ type WorkflowEngine interface {
 	RunAsync(ctx context.Context, projectID string) (*model.WorkflowRun, error)
 	GetRun(ctx context.Context, id string) (*model.WorkflowRun, error)
 	ListRuns(ctx context.Context, params repository.WorkflowRunListParams) ([]*model.WorkflowRun, int, error)
+	CancelRun(ctx context.Context, id string) error
 }
