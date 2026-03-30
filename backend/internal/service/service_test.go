@@ -35,13 +35,13 @@ func (r *fakeAuditRepo) TaskTimeline(_ context.Context, _ string, _, _ int) ([]*
 }
 
 type fakeTaskRepo struct {
-	tasks              map[string]*model.Task
-	updateStatusCalls  int
-	lastUpdatedTaskID  string
-	lastUpdatedStatus  model.TaskStatus
-	deleteCalls        int
-	updateCalls        int
-	createCalls        int
+	tasks             map[string]*model.Task
+	updateStatusCalls int
+	lastUpdatedTaskID string
+	lastUpdatedStatus model.TaskStatus
+	deleteCalls       int
+	updateCalls       int
+	createCalls       int
 }
 
 func (r *fakeTaskRepo) Create(_ context.Context, t *model.Task) error {
