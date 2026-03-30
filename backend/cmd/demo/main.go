@@ -45,12 +45,14 @@ func main() {
 	// --- Step 2: 注册 Agent 组织树 ---
 	next("注册 Agent 组织树（PM → Supervisor → Worker / Reviewer）")
 
-	pmID := mustCreateAgent("灵筹-项目经理", "pm", "", "项目分解、阶段规划与任务创建", []string{"tool.*"})
-	supID := mustCreateAgent("灵筹-主管", "supervisor", pmID, "任务契约制定、执行分派与监督", []string{"tool.*"})
-	wkID := mustCreateAgent("灵筹-执行者", "worker", supID, "任务执行、工件生成与交接", []string{"tool.doc_generator", "tool.artifact_storage", "tool.test_runner"})
-	rvID := mustCreateAgent("灵筹-评审员", "reviewer", pmID, "独立评审、质量检查与评审报告", []string{"tool.*"})
+	pmID := mustCreateAgent("灵筹-项目经理", "pm", "", "项目分解、阶段规划与任务创建", []string{"tool.*"}, "mock", "general")
+	supID := mustCreateAgent("灵筹-主管", "supervisor", pmID, "任务契约制定、执行分派与监督", []string{"tool.*"}, "mock", "general")
+	wkID := mustCreateAgent("灵筹-后端执行者", "worker", supID, "后端任务执行、工件生成与交接", []string{"tool.doc_generator", "tool.artifact_storage", "tool.test_runner"}, "mock", "backend")
+	wkFeID := mustCreateAgent("灵筹-前端执行者", "worker", supID, "前端任务执行、页面实现", []string{"tool.doc_generator", "tool.artifact_storage"}, "mock", "frontend")
+	rvID := mustCreateAgent("灵筹-评审员", "reviewer", pmID, "独立评审、质量检查与评审报告", []string{"tool.*"}, "mock", "qa")
 
-	printOK("已注册 4 个 Agent: PM(%s), Supervisor(%s), Worker(%s), Reviewer(%s)", short(pmID), short(supID), short(wkID), short(rvID))
+	printOK("已注册 5 个 Agent: PM(%s), Sup(%s), BackendWorker(%s), FrontendWorker(%s), Reviewer(%s)",
+		short(pmID), short(supID), short(wkID), short(wkFeID), short(rvID))
 
 	// --- Step 3: 创建 Demo 项目 ---
 	next("创建 Demo 项目")
@@ -74,6 +76,40 @@ func main() {
 	printOK("工作流完成: 状态=%s, 步骤数=%d", runStatus, len(steps))
 	if runSummary != "" {
 		fmt.Printf("  摘要: %s\n", runSummary)
+	}
+
+	// --- Step 4.5: 验证工作流持久化（运行历史 & 步骤） ---
+	next("验证工作流持久化（运行历史 & 步骤查询）")
+
+	persistedRuns := mustListItems("持久化运行记录", "GET", fmt.Sprintf("/api/v1/orchestrator/runs?project_id=%s", projID))
+	printOK("数据库中运行记录: %d 条", len(persistedRuns))
+
+	if runID != "" {
+		persistedRun := mustGet(fmt.Sprintf("/api/v1/orchestrator/runs/%s", runID))
+		prStatus := getString(persistedRun, "status")
+		printOK("运行 %s 持久化状态: %s", short(runID), prStatus)
+	}
+
+	// --- Step 4.6: 交接快照演示 ---
+	next("交接快照演示（Worker 生成结构化交接信息）")
+
+	// 先获取任务列表用于交接快照
+	earlyTasks := mustListItems("任务（用于交接快照）", "GET", "/api/v1/tasks?project_id="+projID+"&limit=100")
+	var handoffTaskID string
+	for _, t := range earlyTasks {
+		tm := t.(map[string]any)
+		handoffTaskID = getString(tm, "id")
+		break
+	}
+	if handoffTaskID != "" {
+		handoffID := mustCreateHandoff(handoffTaskID, wkID)
+		printOK("交接快照已创建: %s (任务: %s, Agent: %s)", short(handoffID), short(handoffTaskID), short(wkID))
+
+		latestHandoff := mustGet(fmt.Sprintf("/api/v1/tasks/%s/handoff-snapshots/latest", handoffTaskID))
+		hsAgent := getString(latestHandoff, "agent_id")
+		printOK("最新交接快照验证: agent_id=%s", short(hsAgent))
+	} else {
+		fmt.Println("  ⚠ 无可用任务，跳过交接快照演示")
 	}
 
 	// --- Step 5: 验证数据完整性 ---
@@ -222,7 +258,7 @@ func main() {
 	fmt.Printf("  │ 任务数         │ %-35d │\n", len(tasks))
 	fmt.Printf("  │ 工件数         │ %-35d │\n", len(artifacts))
 	fmt.Printf("  │ 评审报告数     │ %-35d │\n", len(reviews))
-	fmt.Printf("  │ 组织树节点     │ %-35d │\n", len(orgTree))
+	fmt.Printf("  │ Agent 数       │ %-35d │\n", len(orgTree))
 	fmt.Printf("  │ 工作流运行     │ %-35s │\n", short(runID))
 	fmt.Printf("  │ 审计事件       │ %-35d │\n", len(timeline))
 	fmt.Println("  └─────────────────────────────────────────────────────┘")
@@ -230,8 +266,10 @@ func main() {
 	fmt.Println("  验证清单：")
 	fmt.Println("  [✓] PM 分解项目为阶段和任务")
 	fmt.Println("  [✓] Supervisor 创建契约并分派执行者")
-	fmt.Println("  [✓] Worker 执行任务并生成工件")
+	fmt.Println("  [✓] Worker 执行任务并生成工件（含 backend/frontend 专长）")
 	fmt.Println("  [✓] Reviewer 独立评审交付物")
+	fmt.Println("  [✓] 工作流运行持久化与步骤查询")
+	fmt.Println("  [✓] 交接快照创建与查询")
 	if targetTaskID != "" {
 		fmt.Println("  [✓] 审批创建与审批通过")
 		fmt.Println("  [✓] 审批通过后任务自动完成")
@@ -250,6 +288,7 @@ func main() {
 	fmt.Printf("  项目详情: \033[4mhttp://localhost:3000/projects/%s\033[0m\n", projID)
 	fmt.Println("  任务看板: \033[4mhttp://localhost:3000/tasks\033[0m")
 	fmt.Println("  Agent 组织树: \033[4mhttp://localhost:3000/agents\033[0m")
+	fmt.Println("  工作流运行: \033[4mhttp://localhost:3000/workflows\033[0m")
 	fmt.Println("  工件列表: \033[4mhttp://localhost:3000/artifacts\033[0m")
 	fmt.Println("  审批中心: \033[4mhttp://localhost:3000/approvals\033[0m")
 	fmt.Println("  审计时间线: \033[4mhttp://localhost:3000/audit\033[0m")
@@ -330,14 +369,16 @@ func mustGet(path string) map[string]any {
 	return result
 }
 
-func mustCreateAgent(name, role, reportsTo, desc string, capabilities []string) string {
+func mustCreateAgent(name, role, reportsTo, desc string, capabilities []string, agentType, specialization string) string {
 	body := map[string]any{
-		"name":         name,
-		"role":         role,
-		"description":  desc,
-		"status":       "active",
-		"capabilities": capabilities,
-		"metadata":     map[string]any{},
+		"name":           name,
+		"role":           role,
+		"agent_type":     agentType,
+		"specialization": specialization,
+		"description":    desc,
+		"status":         "active",
+		"capabilities":   capabilities,
+		"metadata":       map[string]any{},
 	}
 	if reportsTo != "" {
 		body["reports_to"] = reportsTo
@@ -429,6 +470,42 @@ func mustCreateApproval(projID, taskID, requestedBy, approverID, taskTitle strin
 	data := getMap(result, "data")
 	if data == nil {
 		fatal("创建审批响应缺少 data")
+	}
+	return getString(data, "id")
+}
+
+func mustCreateHandoff(taskID, agentID string) string {
+	body := map[string]any{
+		"task_id":  taskID,
+		"agent_id": agentID,
+		"summary":  "Demo 交接：任务执行完毕，生成结构化交接信息",
+		"completed_items": []string{
+			"核心功能实现",
+			"单元测试编写",
+			"代码评审通过",
+		},
+		"pending_items": []string{
+			"集成测试待补充",
+			"文档待更新",
+		},
+		"risks": []string{
+			"性能未经压测",
+		},
+		"next_steps": []string{
+			"执行集成测试",
+			"更新技术文档",
+			"准备发布",
+		},
+		"artifact_refs": []string{},
+		"metadata":      map[string]any{},
+	}
+	result, code := doRequest("POST", "/api/v1/handoff-snapshots", body)
+	if code >= 400 {
+		fatal("创建交接快照失败: %v", result)
+	}
+	data := getMap(result, "data")
+	if data == nil {
+		fatal("创建交接快照响应缺少 data")
 	}
 	return getString(data, "id")
 }
