@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { ShieldCheck } from "lucide-react";
+import { useEffect, useState, useCallback, useMemo } from "react";
+import { ShieldCheck, Wifi, WifiOff } from "lucide-react";
 import { api } from "@/lib/api";
 import type { ApprovalRequest } from "@/lib/types";
 import { StatusBadge } from "@/components/StatusBadge";
 import { formatTime, getApprovalStatus, relativeTime } from "@/lib/utils";
+import { useEventStream, type SSEEvent } from "@/lib/useEventStream";
 
 type FilterTab = "all" | "pending" | "approved" | "rejected";
 
@@ -23,16 +24,16 @@ export default function ApprovalsPage() {
   const [error, setError] = useState<string | null>(null);
   const [decidingId, setDecidingId] = useState<string | null>(null);
 
+  const fetchList = useCallback(() => {
+    const params = tab === "all" ? undefined : { status: tab };
+    return api.approvals.list(params).then((res) => setItems(res.items));
+  }, [tab]);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    const params = tab === "all" ? undefined : { status: tab };
-    api.approvals
-      .list(params)
-      .then((res) => {
-        if (!cancelled) setItems(res.items);
-      })
+    fetchList()
       .catch((e: Error) => {
         if (!cancelled) setError(e.message || "加载失败");
       })
@@ -42,7 +43,20 @@ export default function ApprovalsPage() {
     return () => {
       cancelled = true;
     };
-  }, [tab]);
+  }, [fetchList]);
+
+  // SSE real-time updates
+  const topics = useMemo(() => ["approval"], []);
+  const onEvent = useCallback((_evt: SSEEvent) => {
+    fetchList().catch(() => {});
+  }, [fetchList]);
+
+  const { connected, mode } = useEventStream({
+    topics,
+    onEvent,
+    onPoll: () => { fetchList().catch(() => {}); },
+    pollInterval: 5000,
+  });
 
   async function handleDecide(id: string, status: "approved" | "rejected") {
     const msg = status === "approved" ? "确认批准该审批？" : "确认拒绝该审批？";
@@ -69,7 +83,18 @@ export default function ApprovalsPage() {
         </div>
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">审批中心</h1>
-          <p className="mt-1 text-sm text-gray-500">待办与已处理审批</p>
+          <p className="mt-1 text-sm text-gray-500">
+            待办与已处理审批
+            {connected ? (
+              <span className="ml-2 inline-flex items-center gap-1 text-green-600">
+                <Wifi className="h-3 w-3" /> 实时
+              </span>
+            ) : mode === "poll" ? (
+              <span className="ml-2 inline-flex items-center gap-1 text-amber-600">
+                <WifiOff className="h-3 w-3" /> 轮询
+              </span>
+            ) : null}
+          </p>
         </div>
       </div>
 

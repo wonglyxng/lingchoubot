@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strings"
+	"time"
 
 	"github.com/lingchou/lingchoubot/backend/internal/model"
 	"github.com/lingchou/lingchoubot/backend/internal/repository"
@@ -12,15 +14,56 @@ import (
 type AuditService struct {
 	repo   AuditRepository
 	logger *slog.Logger
+	hub    *EventHub
 }
 
 func NewAuditService(repo AuditRepository, logger *slog.Logger) *AuditService {
 	return &AuditService{repo: repo, logger: logger}
 }
 
+// SetEventHub attaches an EventHub for real-time event broadcasting.
+func (s *AuditService) SetEventHub(hub *EventHub) {
+	s.hub = hub
+}
+
 func (s *AuditService) Log(ctx context.Context, entry *model.AuditLog) {
 	if err := s.repo.Create(ctx, entry); err != nil {
 		s.logger.Error("audit log write failed", "error", err, "event", entry.EventType)
+	}
+	// Publish to SSE subscribers
+	if s.hub != nil {
+		s.publishEvent(entry)
+	}
+}
+
+// publishEvent converts an audit log entry to an SSE event and publishes it.
+func (s *AuditService) publishEvent(entry *model.AuditLog) {
+	topic := topicFromEventType(entry.EventType)
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return
+	}
+	s.hub.Publish(&Event{
+		ID:        entry.ID,
+		Topic:     topic,
+		EventType: entry.EventType,
+		TargetID:  entry.TargetID,
+		Data:      data,
+		Timestamp: time.Now(),
+	})
+}
+
+// topicFromEventType maps audit event types to SSE topics.
+func topicFromEventType(eventType string) string {
+	switch {
+	case strings.HasPrefix(eventType, "workflow."):
+		return "workflow"
+	case strings.HasPrefix(eventType, "approval"):
+		return "approval"
+	case strings.HasPrefix(eventType, "tool_call"):
+		return "tool_call"
+	default:
+		return "audit"
 	}
 }
 

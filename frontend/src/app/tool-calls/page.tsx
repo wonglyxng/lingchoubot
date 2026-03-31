@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { Wrench } from "lucide-react";
+import { useEffect, useState, useCallback, useMemo } from "react";
+import { Wrench, Wifi, WifiOff } from "lucide-react";
 import { api } from "@/lib/api";
 import type { ToolCall } from "@/lib/types";
 import { StatusBadge } from "@/components/StatusBadge";
 import { formatTime } from "@/lib/utils";
+import { useEventStream, type SSEEvent } from "@/lib/useEventStream";
 
 function toolCallStatus(status: string) {
   switch (status) {
@@ -40,6 +41,19 @@ export default function ToolCallsPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // SSE real-time updates
+  const topics = useMemo(() => ["tool_call"], []);
+  const onEvent = useCallback((_evt: SSEEvent) => {
+    api.toolCalls.list().then((res) => setItems(res.items ?? [])).catch(() => {});
+  }, []);
+
+  const { connected, mode } = useEventStream({
+    topics,
+    onEvent,
+    onPoll: load,
+    pollInterval: 5000,
+  });
+
   return (
     <div className="p-6">
       <div className="mb-6 flex items-center gap-3">
@@ -48,7 +62,18 @@ export default function ToolCallsPage() {
         </div>
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">工具调用</h1>
-          <p className="mt-1 text-sm text-gray-500">Tool Gateway 调用历史</p>
+          <p className="mt-1 text-sm text-gray-500">
+            Tool Gateway 调用历史
+            {connected ? (
+              <span className="ml-2 inline-flex items-center gap-1 text-green-600">
+                <Wifi className="h-3 w-3" /> 实时
+              </span>
+            ) : mode === "poll" ? (
+              <span className="ml-2 inline-flex items-center gap-1 text-amber-600">
+                <WifiOff className="h-3 w-3" /> 轮询
+              </span>
+            ) : null}
+          </p>
         </div>
       </div>
 

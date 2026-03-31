@@ -1,25 +1,26 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { ScrollText } from "lucide-react";
+import { useEffect, useState, useCallback, useMemo } from "react";
+import { ScrollText, Wifi, WifiOff } from "lucide-react";
 import { api } from "@/lib/api";
 import type { AuditLog } from "@/lib/types";
 import { formatTime, relativeTime } from "@/lib/utils";
+import { useEventStream, type SSEEvent } from "@/lib/useEventStream";
 
 export default function AuditPage() {
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState<AuditLog[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  const fetchList = useCallback(() => {
+    return api.audit.list().then((res) => setItems(res.items));
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    api.audit
-      .list()
-      .then((res) => {
-        if (!cancelled) setItems(res.items);
-      })
+    fetchList()
       .catch((e: Error) => {
         if (!cancelled) setError(e.message || "加载失败");
       })
@@ -29,7 +30,20 @@ export default function AuditPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [fetchList]);
+
+  // SSE real-time updates — audit receives all topics
+  const topics = useMemo(() => ["audit", "workflow", "approval", "tool_call"], []);
+  const onEvent = useCallback((_evt: SSEEvent) => {
+    fetchList().catch(() => {});
+  }, [fetchList]);
+
+  const { connected, mode } = useEventStream({
+    topics,
+    onEvent,
+    onPoll: () => { fetchList().catch(() => {}); },
+    pollInterval: 10000,
+  });
 
   return (
     <div className="min-h-full bg-gray-50 p-6">
@@ -39,7 +53,18 @@ export default function AuditPage() {
         </div>
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">审计</h1>
-          <p className="mt-1 text-sm text-gray-500">关键操作时间线</p>
+          <p className="mt-1 text-sm text-gray-500">
+            关键操作时间线
+            {connected ? (
+              <span className="ml-2 inline-flex items-center gap-1 text-green-600">
+                <Wifi className="h-3 w-3" /> 实时
+              </span>
+            ) : mode === "poll" ? (
+              <span className="ml-2 inline-flex items-center gap-1 text-amber-600">
+                <WifiOff className="h-3 w-3" /> 轮询
+              </span>
+            ) : null}
+          </p>
         </div>
       </div>
 

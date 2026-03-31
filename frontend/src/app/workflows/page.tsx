@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
-import { Activity, ChevronDown, ChevronRight, Play, RefreshCw } from "lucide-react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { Activity, ChevronDown, ChevronRight, Play, RefreshCw, Wifi, WifiOff } from "lucide-react";
 import { api } from "@/lib/api";
 import type { WorkflowRun, WorkflowStep, Project } from "@/lib/types";
 import { StatusBadge } from "@/components/StatusBadge";
 import { FormModal, FormField, selectClass } from "@/components/FormModal";
 import { getWorkflowStatus, formatTime, relativeTime } from "@/lib/utils";
+import { useEventStream, type SSEEvent } from "@/lib/useEventStream";
 
 function stepStatusVariant(status: string) {
   switch (status) {
@@ -176,6 +177,23 @@ export default function WorkflowsPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // SSE real-time updates: refresh list on any workflow event
+  const topics = useMemo(() => ["workflow"], []);
+  const onEvent = useCallback((_evt: SSEEvent) => {
+    // Refresh full list when workflow events arrive
+    api.workflows
+      .list({ limit: 50 })
+      .then((res) => setRuns(res.items))
+      .catch(() => {});
+  }, []);
+
+  const { connected, mode } = useEventStream({
+    topics,
+    onEvent,
+    onPoll: load,
+    pollInterval: 5000,
+  });
+
   const openStart = async () => {
     try {
       const res = await api.projects.list(200, 0);
@@ -219,7 +237,18 @@ export default function WorkflowsPage() {
           </div>
           <div>
             <h1 className="text-2xl font-semibold text-gray-900">工作流运行</h1>
-            <p className="mt-1 text-sm text-gray-500">查看编排引擎运行记录与步骤</p>
+            <p className="mt-1 text-sm text-gray-500">
+              查看编排引擎运行记录与步骤
+              {connected ? (
+                <span className="ml-2 inline-flex items-center gap-1 text-green-600">
+                  <Wifi className="h-3 w-3" /> 实时
+                </span>
+              ) : mode === "poll" ? (
+                <span className="ml-2 inline-flex items-center gap-1 text-amber-600">
+                  <WifiOff className="h-3 w-3" /> 轮询
+                </span>
+              ) : null}
+            </p>
           </div>
         </div>
         <button

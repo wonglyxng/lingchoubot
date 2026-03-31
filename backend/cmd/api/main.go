@@ -49,7 +49,9 @@ func main() {
 	toolCallRepo := repository.NewToolCallRepo(db)
 
 	// --- services ---
+	eventHub := service.NewEventHub()
 	auditSvc := service.NewAuditService(auditRepo, logger)
+	auditSvc.SetEventHub(eventHub)
 	projectSvc := service.NewProjectService(projectRepo, auditSvc)
 	phaseSvc := service.NewPhaseService(phaseRepo, projectSvc, auditSvc)
 	agentSvc := service.NewAgentService(agentRepo, auditSvc)
@@ -87,6 +89,7 @@ func main() {
 	handler.NewReviewReportHandler(reviewSvc).Register(mux)
 	handler.NewApprovalRequestHandler(approvalSvc).Register(mux)
 	handler.NewAuditHandler(auditSvc).Register(mux)
+	handler.NewSSEHandler(eventHub).Register(mux)
 
 	// --- tool gateway ---
 	gw := gateway.NewGateway(toolCallSvc, agentSvc, contractSvc, auditSvc, logger)
