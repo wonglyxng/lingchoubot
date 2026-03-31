@@ -118,8 +118,8 @@ func TestIntegration_HappyPath(t *testing.T) {
 
 // reworkReviewer rejects each task's first review, then approves on the next.
 type reworkReviewer struct {
-	mu       sync.Mutex
-	perTask  map[string]int32 // taskID → call count
+	mu         sync.Mutex
+	perTask    map[string]int32 // taskID → call count
 	totalCalls atomic.Int32
 }
 
