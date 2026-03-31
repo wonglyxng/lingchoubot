@@ -64,30 +64,39 @@ npm run dev
 
 ## 项目结构
 
+当前主要结构概览如下：
+
 ```
 lingchoubot/
-├── AGENTS.md                # 编码智能体操作规范
-├── docker-compose.yml       # 本地环境编排
-├── docs/                    # 设计文档
-│   ├── 001-灵筹系统总体架构设计.md
-│   ├── 002-灵筹 Agent 组织树与职责说明.md
-│   └── 003-灵筹 MVP 开发路线图.md
-├── backend/                 # Go 后端
+├── AGENTS.md                    # 编码智能体操作规范
+├── README.md                    # 项目说明与启动指引
+├── docker-compose.yml           # 本地开发与联调编排
+├── docs/                        # 架构、API、阶段总结文档
+├── backend/                     # Go 后端
+│   ├── Dockerfile               # 后端镜像构建（api / migrate / worker）
 │   ├── cmd/
-│   │   ├── api/             # API 服务入口
-│   │   └── migrate/         # Migration 工具
+│   │   ├── api/                 # API 服务入口
+│   │   ├── demo/                # 演示入口
+│   │   ├── migrate/             # Migration 工具入口
+│   │   └── worker/              # Temporal Worker 独立进程入口
 │   ├── internal/
-│   │   ├── config/          # 配置管理
-│   │   ├── model/           # 数据模型
-│   │   ├── repository/      # 数据访问层
-│   │   ├── service/         # 业务逻辑层
-│   │   ├── handler/         # HTTP handler
-│   │   └── middleware/      # 中间件
-│   └── migrations/          # SQL migration 文件
-└── frontend/                # Next.js 前端
+│   │   ├── config/              # 配置加载
+│   │   ├── gateway/             # 工具网关与工件存储
+│   │   ├── handler/             # HTTP Handler
+│   │   ├── middleware/          # 中间件
+│   │   ├── model/               # 领域模型
+│   │   ├── orchestrator/        # 本地/Temporal 编排引擎
+│   │   ├── repository/          # 数据访问层
+│   │   ├── runtime/             # Agent 运行时适配
+│   │   └── service/             # 业务逻辑层
+│   └── migrations/              # SQL Migration 文件
+└── frontend/                    # Next.js 前端
+    ├── Dockerfile               # 前端镜像构建
+    ├── public/                  # 静态资源
     └── src/
-        ├── app/             # 页面路由
-        └── components/      # 共享组件
+        ├── app/                 # App Router 页面
+        ├── components/          # 共享组件
+        └── lib/                 # 前端工具与 API 封装
 ```
 
 ## API 端点
