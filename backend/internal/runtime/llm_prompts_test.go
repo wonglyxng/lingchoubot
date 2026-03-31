@@ -91,10 +91,10 @@ func TestEvalSamples_Validation(t *testing.T) {
 	// Verify that mock runners can produce valid output for each eval sample
 	samples := EvalSamples()
 	mockRunners := map[string]AgentRunner{
-		"pm":       &MockPMAgent{},
+		"pm":         &MockPMAgent{},
 		"supervisor": &MockSupervisorAgent{},
-		"worker":   &MockBackendWorkerAgent{},
-		"reviewer": &MockReviewerAgent{},
+		"worker":     &MockBackendWorkerAgent{},
+		"reviewer":   &MockReviewerAgent{},
 	}
 	for _, s := range samples {
 		runner, ok := mockRunners[s.Role]

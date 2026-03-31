@@ -171,13 +171,13 @@ func TestLoad_Defaults(t *testing.T) {
 
 func TestLoad_WithEnvVars(t *testing.T) {
 	envs := map[string]string{
-		"SERVER_PORT":    "9090",
-		"LLM_ENABLED":   "true",
-		"LLM_BASE_URL":  "http://custom-llm.com/v1",
-		"LLM_API_KEY":   "sk-test",
-		"LLM_MODEL":     "gpt-4o",
-		"LLM_PM_MODEL":  "claude-3",
-		"API_KEY":        "my-api-key",
+		"SERVER_PORT":  "9090",
+		"LLM_ENABLED":  "true",
+		"LLM_BASE_URL": "http://custom-llm.com/v1",
+		"LLM_API_KEY":  "sk-test",
+		"LLM_MODEL":    "gpt-4o",
+		"LLM_PM_MODEL": "claude-3",
+		"API_KEY":      "my-api-key",
 	}
 
 	// Save and set
@@ -256,14 +256,14 @@ func TestDatabaseDSN(t *testing.T) {
 
 func TestLoadLLMConfig_RoleOverrides(t *testing.T) {
 	envs := map[string]string{
-		"LLM_BASE_URL":           "http://global.com/v1",
-		"LLM_API_KEY":            "global-key",
-		"LLM_MODEL":              "gpt-4o",
-		"LLM_PM_BASE_URL":        "http://pm.com/v1",
-		"LLM_PM_API_KEY":         "pm-key",
-		"LLM_PM_MODEL":           "pm-model",
-		"LLM_SUPERVISOR_MODEL":   "sup-model",
-		"LLM_WORKER_BASE_URL":    "http://worker.com/v1",
+		"LLM_BASE_URL":         "http://global.com/v1",
+		"LLM_API_KEY":          "global-key",
+		"LLM_MODEL":            "gpt-4o",
+		"LLM_PM_BASE_URL":      "http://pm.com/v1",
+		"LLM_PM_API_KEY":       "pm-key",
+		"LLM_PM_MODEL":         "pm-model",
+		"LLM_SUPERVISOR_MODEL": "sup-model",
+		"LLM_WORKER_BASE_URL":  "http://worker.com/v1",
 	}
 
 	saved := make(map[string]string)

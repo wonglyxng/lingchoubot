@@ -75,14 +75,14 @@ type chatUsage struct {
 
 // LLMCallMeta holds metadata about a single LLM API call for audit purposes.
 type LLMCallMeta struct {
-	Model            string        `json:"model"`
-	DurationMs       int64         `json:"duration_ms"`
-	PromptTokens     int           `json:"prompt_tokens"`
-	CompletionTokens int           `json:"completion_tokens"`
-	TotalTokens      int           `json:"total_tokens"`
-	StatusCode       int           `json:"status_code"`
-	Error            string        `json:"error,omitempty"`
-	PromptVersion    string        `json:"prompt_version,omitempty"`
+	Model            string `json:"model"`
+	DurationMs       int64  `json:"duration_ms"`
+	PromptTokens     int    `json:"prompt_tokens"`
+	CompletionTokens int    `json:"completion_tokens"`
+	TotalTokens      int    `json:"total_tokens"`
+	StatusCode       int    `json:"status_code"`
+	Error            string `json:"error,omitempty"`
+	PromptVersion    string `json:"prompt_version,omitempty"`
 }
 
 // ChatJSON sends a system+user prompt to the LLM and returns the raw content string.
