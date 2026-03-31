@@ -74,11 +74,47 @@ services:
       TEMPORAL_HOST_PORT: "temporal:7233"
       TEMPORAL_NAMESPACE: "default"
       TEMPORAL_TASK_QUEUE: "lingchou-orchestrator"
+      TEMPORAL_WORKER_EMBEDDED: "${TEMPORAL_WORKER_EMBEDDED:-true}"
     depends_on:
       postgres:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+
+  # 独立 Temporal Worker 进程（生产模式：API 设 TEMPORAL_WORKER_EMBEDDED=false）
+  worker:
+    build:
+      context: ./backend
+    command: ["worker"]
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: lingchou
+      DB_PASSWORD: lingchou
+      DB_NAME: lingchou
+      DB_SSLMODE: disable
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: lingchou
+      MINIO_SECRET_KEY: lingchou_minio_dev
+      MINIO_BUCKET: lingchou-artifacts
+      MINIO_USE_SSL: "false"
+      LLM_ENABLED: "${LLM_ENABLED:-false}"
+      LLM_BASE_URL: "${LLM_BASE_URL:-https://api.openai.com/v1}"
+      LLM_API_KEY: "${LLM_API_KEY:-}"
+      LLM_MODEL: "${LLM_MODEL:-gpt-4o-mini}"
+      TEMPORAL_ENABLED: "true"
+      TEMPORAL_HOST_PORT: "temporal:7233"
+      TEMPORAL_NAMESPACE: "default"
+      TEMPORAL_TASK_QUEUE: "lingchou-orchestrator"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      temporal:
+        condition: service_started
+    profiles:
+      - temporal
 
   frontend:
     build:
