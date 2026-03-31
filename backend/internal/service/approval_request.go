@@ -8,21 +8,13 @@ import (
 	"github.com/lingchou/lingchoubot/backend/internal/repository"
 )
 
-// approvalRepo defines the repository methods ApprovalRequestService depends on.
-type approvalRepo interface {
-	Create(ctx context.Context, a *model.ApprovalRequest) error
-	GetByID(ctx context.Context, id string) (*model.ApprovalRequest, error)
-	List(ctx context.Context, p repository.ApprovalListParams) ([]*model.ApprovalRequest, int, error)
-	Decide(ctx context.Context, id string, status model.ApprovalStatus, note string) error
-}
-
 type ApprovalRequestService struct {
-	repo    approvalRepo
+	repo    ApprovalRepository
 	taskSvc *TaskService
 	audit   *AuditService
 }
 
-func NewApprovalRequestService(repo *repository.ApprovalRequestRepo, taskSvc *TaskService, audit *AuditService) *ApprovalRequestService {
+func NewApprovalRequestService(repo ApprovalRepository, taskSvc *TaskService, audit *AuditService) *ApprovalRequestService {
 	return &ApprovalRequestService{repo: repo, taskSvc: taskSvc, audit: audit}
 }
 

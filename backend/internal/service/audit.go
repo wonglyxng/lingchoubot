@@ -9,20 +9,12 @@ import (
 	"github.com/lingchou/lingchoubot/backend/internal/repository"
 )
 
-// auditRepo defines the repository methods AuditService depends on.
-type auditRepo interface {
-	Create(ctx context.Context, a *model.AuditLog) error
-	List(ctx context.Context, p repository.AuditListParams) ([]*model.AuditLog, int, error)
-	ProjectTimeline(ctx context.Context, projectID string, limit, offset int) ([]*model.AuditLog, int, error)
-	TaskTimeline(ctx context.Context, taskID string, limit, offset int) ([]*model.AuditLog, int, error)
-}
-
 type AuditService struct {
-	repo   auditRepo
+	repo   AuditRepository
 	logger *slog.Logger
 }
 
-func NewAuditService(repo *repository.AuditRepo, logger *slog.Logger) *AuditService {
+func NewAuditService(repo AuditRepository, logger *slog.Logger) *AuditService {
 	return &AuditService{repo: repo, logger: logger}
 }
 

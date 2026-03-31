@@ -9,26 +9,13 @@ import (
 	"github.com/lingchou/lingchoubot/backend/internal/repository"
 )
 
-type workflowRunRepo interface {
-	Create(ctx context.Context, run *model.WorkflowRun) error
-	GetByID(ctx context.Context, id string) (*model.WorkflowRun, error)
-	UpdateStatus(ctx context.Context, run *model.WorkflowRun) error
-	List(ctx context.Context, p repository.WorkflowRunListParams) ([]*model.WorkflowRun, int, error)
-}
-
-type workflowStepRepo interface {
-	Create(ctx context.Context, step *model.WorkflowStep) error
-	UpdateStatus(ctx context.Context, step *model.WorkflowStep) error
-	ListByRunID(ctx context.Context, runID string) ([]*model.WorkflowStep, error)
-}
-
 type WorkflowService struct {
-	runRepo  workflowRunRepo
-	stepRepo workflowStepRepo
+	runRepo  WorkflowRunRepository
+	stepRepo WorkflowStepRepository
 	audit    *AuditService
 }
 
-func NewWorkflowService(runRepo *repository.WorkflowRunRepo, stepRepo *repository.WorkflowStepRepo, audit *AuditService) *WorkflowService {
+func NewWorkflowService(runRepo WorkflowRunRepository, stepRepo WorkflowStepRepository, audit *AuditService) *WorkflowService {
 	return &WorkflowService{runRepo: runRepo, stepRepo: stepRepo, audit: audit}
 }
 

@@ -5,16 +5,15 @@ import (
 	"fmt"
 
 	"github.com/lingchou/lingchoubot/backend/internal/model"
-	"github.com/lingchou/lingchoubot/backend/internal/repository"
 )
 
 type PhaseService struct {
-	repo    *repository.PhaseRepo
+	repo    PhaseRepository
 	projSvc *ProjectService
 	audit   *AuditService
 }
 
-func NewPhaseService(repo *repository.PhaseRepo, projSvc *ProjectService, audit *AuditService) *PhaseService {
+func NewPhaseService(repo PhaseRepository, projSvc *ProjectService, audit *AuditService) *PhaseService {
 	return &PhaseService{repo: repo, projSvc: projSvc, audit: audit}
 }
 

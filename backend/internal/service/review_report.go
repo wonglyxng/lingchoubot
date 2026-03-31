@@ -9,12 +9,12 @@ import (
 )
 
 type ReviewReportService struct {
-	repo    *repository.ReviewReportRepo
+	repo    ReviewReportRepository
 	taskSvc *TaskService
 	audit   *AuditService
 }
 
-func NewReviewReportService(repo *repository.ReviewReportRepo, taskSvc *TaskService, audit *AuditService) *ReviewReportService {
+func NewReviewReportService(repo ReviewReportRepository, taskSvc *TaskService, audit *AuditService) *ReviewReportService {
 	return &ReviewReportService{repo: repo, taskSvc: taskSvc, audit: audit}
 }
 

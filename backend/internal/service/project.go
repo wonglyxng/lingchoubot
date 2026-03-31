@@ -5,15 +5,14 @@ import (
 	"fmt"
 
 	"github.com/lingchou/lingchoubot/backend/internal/model"
-	"github.com/lingchou/lingchoubot/backend/internal/repository"
 )
 
 type ProjectService struct {
-	repo  *repository.ProjectRepo
+	repo  ProjectRepository
 	audit *AuditService
 }
 
-func NewProjectService(repo *repository.ProjectRepo, audit *AuditService) *ProjectService {
+func NewProjectService(repo ProjectRepository, audit *AuditService) *ProjectService {
 	return &ProjectService{repo: repo, audit: audit}
 }
 

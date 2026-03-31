@@ -9,12 +9,12 @@ import (
 )
 
 type ArtifactService struct {
-	repo    *repository.ArtifactRepo
-	verRepo *repository.ArtifactVersionRepo
+	repo    ArtifactRepository
+	verRepo ArtifactVersionRepository
 	audit   *AuditService
 }
 
-func NewArtifactService(repo *repository.ArtifactRepo, verRepo *repository.ArtifactVersionRepo, audit *AuditService) *ArtifactService {
+func NewArtifactService(repo ArtifactRepository, verRepo ArtifactVersionRepository, audit *AuditService) *ArtifactService {
 	return &ArtifactService{repo: repo, verRepo: verRepo, audit: audit}
 }
 

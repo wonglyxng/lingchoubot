@@ -5,15 +5,14 @@ import (
 	"fmt"
 
 	"github.com/lingchou/lingchoubot/backend/internal/model"
-	"github.com/lingchou/lingchoubot/backend/internal/repository"
 )
 
 type TaskContractService struct {
-	repo  *repository.TaskContractRepo
+	repo  TaskContractRepository
 	audit *AuditService
 }
 
-func NewTaskContractService(repo *repository.TaskContractRepo, audit *AuditService) *TaskContractService {
+func NewTaskContractService(repo TaskContractRepository, audit *AuditService) *TaskContractService {
 	return &TaskContractService{repo: repo, audit: audit}
 }
 

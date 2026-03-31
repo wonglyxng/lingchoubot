@@ -9,11 +9,11 @@ import (
 )
 
 type TaskAssignmentService struct {
-	repo  *repository.TaskAssignmentRepo
+	repo  TaskAssignmentRepository
 	audit *AuditService
 }
 
-func NewTaskAssignmentService(repo *repository.TaskAssignmentRepo, audit *AuditService) *TaskAssignmentService {
+func NewTaskAssignmentService(repo TaskAssignmentRepository, audit *AuditService) *TaskAssignmentService {
 	return &TaskAssignmentService{repo: repo, audit: audit}
 }
 

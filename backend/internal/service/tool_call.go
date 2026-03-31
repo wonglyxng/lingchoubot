@@ -9,11 +9,11 @@ import (
 )
 
 type ToolCallService struct {
-	repo  *repository.ToolCallRepo
+	repo  ToolCallRepository
 	audit *AuditService
 }
 
-func NewToolCallService(repo *repository.ToolCallRepo, audit *AuditService) *ToolCallService {
+func NewToolCallService(repo ToolCallRepository, audit *AuditService) *ToolCallService {
 	return &ToolCallService{repo: repo, audit: audit}
 }
 

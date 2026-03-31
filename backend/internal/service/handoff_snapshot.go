@@ -9,11 +9,11 @@ import (
 )
 
 type HandoffSnapshotService struct {
-	repo  *repository.HandoffSnapshotRepo
+	repo  HandoffSnapshotRepository
 	audit *AuditService
 }
 
-func NewHandoffSnapshotService(repo *repository.HandoffSnapshotRepo, audit *AuditService) *HandoffSnapshotService {
+func NewHandoffSnapshotService(repo HandoffSnapshotRepository, audit *AuditService) *HandoffSnapshotService {
 	return &HandoffSnapshotService{repo: repo, audit: audit}
 }
 

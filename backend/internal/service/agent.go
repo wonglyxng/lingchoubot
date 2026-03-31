@@ -5,15 +5,14 @@ import (
 	"fmt"
 
 	"github.com/lingchou/lingchoubot/backend/internal/model"
-	"github.com/lingchou/lingchoubot/backend/internal/repository"
 )
 
 type AgentService struct {
-	repo  *repository.AgentRepo
+	repo  AgentRepository
 	audit *AuditService
 }
 
-func NewAgentService(repo *repository.AgentRepo, audit *AuditService) *AgentService {
+func NewAgentService(repo AgentRepository, audit *AuditService) *AgentService {
 	return &AgentService{repo: repo, audit: audit}
 }
 
