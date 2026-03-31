@@ -5,6 +5,33 @@ import (
 	"fmt"
 )
 
+// PromptVersion tracks versioning metadata for a system prompt.
+type PromptVersion struct {
+	Role    string `json:"role"`
+	Spec    string `json:"spec,omitempty"`
+	Version string `json:"version"`
+	// ChangeLog describes what changed in this version.
+	ChangeLog string `json:"change_log"`
+}
+
+// promptVersions is the canonical registry of prompt versions.
+var promptVersions = map[string]PromptVersion{
+	"pm":         {Role: "pm", Version: "1.0.0", ChangeLog: "初始版本：项目分解为阶段+任务"},
+	"supervisor": {Role: "supervisor", Version: "1.0.0", ChangeLog: "初始版本：任务契约+分派+状态流转"},
+	"worker":     {Role: "worker", Version: "1.0.0", ChangeLog: "初始版本：执行任务产出工件+交接"},
+	"reviewer":   {Role: "reviewer", Version: "1.0.0", ChangeLog: "初始版本：独立评审+结论"},
+}
+
+// GetPromptVersion returns the version metadata for a given role (and optional spec).
+func GetPromptVersion(role, spec string) PromptVersion {
+	key := role
+	if v, ok := promptVersions[key]; ok {
+		v.Spec = spec
+		return v
+	}
+	return PromptVersion{Role: role, Spec: spec, Version: "0.0.0", ChangeLog: "unknown"}
+}
+
 func buildSystemPrompt(role, spec string) string {
 	switch role {
 	case "pm":

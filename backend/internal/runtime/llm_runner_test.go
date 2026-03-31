@@ -303,3 +303,164 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+func TestLLMRunner_Fallback_OnLLMError(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	runner := &LLMAgentRunner{
+		client:   newTestLLMClient("", fmt.Errorf("connection refused")),
+		role:     "pm",
+		spec:     "",
+		logger:   logger,
+		fallback: &MockPMAgent{},
+	}
+
+	input := &AgentTaskInput{
+		RunID:       "run-1",
+		AgentID:     "agent-1",
+		AgentRole:   "pm",
+		Instruction: "分解项目",
+		Project:     &ProjectCtx{ID: "p1", Name: "Test", Description: "test"},
+	}
+
+	output, err := runner.Execute(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if output.Status == OutputStatusFailed {
+		t.Error("fallback should produce a non-failed output")
+	}
+	if !containsHelper(output.Summary, "降级") {
+		t.Errorf("fallback output should be annotated with [降级], got: %s", output.Summary)
+	}
+}
+
+func TestLLMRunner_Fallback_OnParseError(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	runner := &LLMAgentRunner{
+		client:   newTestLLMClient("not json", nil),
+		role:     "worker",
+		spec:     "backend",
+		logger:   logger,
+		fallback: &MockBackendWorkerAgent{},
+	}
+
+	input := &AgentTaskInput{
+		RunID:       "run-1",
+		AgentID:     "agent-1",
+		AgentRole:   "worker",
+		Instruction: "执行",
+		Task:        &TaskCtx{ID: "t1", Title: "task1"},
+	}
+
+	output, err := runner.Execute(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if output.Status == OutputStatusFailed {
+		t.Error("fallback should produce non-failed output")
+	}
+	if !containsHelper(output.Summary, "降级") {
+		t.Errorf("fallback output should be annotated with [降级], got: %s", output.Summary)
+	}
+}
+
+func TestLLMRunner_Fallback_OnValidationError(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// PM output missing phases and tasks → validation fails
+	mockOutput := `{"status":"success","summary":"done"}`
+	runner := &LLMAgentRunner{
+		client:   newTestLLMClient(mockOutput, nil),
+		role:     "pm",
+		spec:     "",
+		logger:   logger,
+		fallback: &MockPMAgent{},
+	}
+
+	input := &AgentTaskInput{
+		RunID:       "run-1",
+		AgentID:     "agent-1",
+		AgentRole:   "pm",
+		Instruction: "分解项目",
+		Project:     &ProjectCtx{ID: "p1", Name: "Test", Description: "test"},
+	}
+
+	output, err := runner.Execute(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// With fallback, should get a valid mock PM output
+	if !containsHelper(output.Summary, "降级") {
+		t.Errorf("expected fallback annotation, got: %s", output.Summary)
+	}
+}
+
+func TestLLMRunner_WithFallback(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	runner := NewLLMRunner(nil, "pm", "", logger)
+	if runner.fallback != nil {
+		t.Error("initially fallback should be nil")
+	}
+	fb := &MockPMAgent{}
+	runner.WithFallback(fb)
+	if runner.fallback != fb {
+		t.Error("WithFallback should set the fallback runner")
+	}
+}
+
+func TestRegisterLLMRunnersWithFallback(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	reg := NewRegistry()
+
+	defaultClient := NewLLMClient(LLMClientConfig{
+		BaseURL: "http://default.example.com",
+		APIKey:  "default-key",
+		Model:   "default-model",
+	})
+
+	RegisterLLMRunnersWithFallback(reg, defaultClient, nil, logger, true)
+
+	// Verify all roles have fallback set
+	for _, role := range []string{"pm", "supervisor", "worker", "reviewer"} {
+		runner, err := reg.Get(role)
+		if err != nil {
+			t.Errorf("expected runner for %s: %v", role, err)
+			continue
+		}
+		llmR, ok := runner.(*LLMAgentRunner)
+		if !ok {
+			t.Errorf("expected *LLMAgentRunner for %s", role)
+			continue
+		}
+		if llmR.fallback == nil {
+			t.Errorf("expected fallback for %s", role)
+		}
+	}
+}
+
+func TestMetaHelpers(t *testing.T) {
+	// nil meta
+	if metaDurationMs(nil) != 0 {
+		t.Error("metaDurationMs(nil) should be 0")
+	}
+	if metaModel(nil) != "" {
+		t.Error("metaModel(nil) should be empty")
+	}
+	if metaTotalTokens(nil) != 0 {
+		t.Error("metaTotalTokens(nil) should be 0")
+	}
+
+	// non-nil meta
+	m := &LLMCallMeta{Model: "gpt-4o", DurationMs: 1234, TotalTokens: 500}
+	if metaDurationMs(m) != 1234 {
+		t.Errorf("expected 1234, got %d", metaDurationMs(m))
+	}
+	if metaModel(m) != "gpt-4o" {
+		t.Errorf("expected gpt-4o, got %s", metaModel(m))
+	}
+	if metaTotalTokens(m) != 500 {
+		t.Errorf("expected 500, got %d", metaTotalTokens(m))
+	}
+}

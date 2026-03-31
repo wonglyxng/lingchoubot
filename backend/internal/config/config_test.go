@@ -158,6 +158,9 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.LLM.Enabled {
 		t.Error("LLM should be disabled by default")
 	}
+	if !cfg.LLM.FallbackEnabled {
+		t.Error("LLM fallback should be enabled by default")
+	}
 	if cfg.LLM.Model != "gpt-4o-mini" {
 		t.Errorf("expected default LLM model gpt-4o-mini, got %s", cfg.LLM.Model)
 	}

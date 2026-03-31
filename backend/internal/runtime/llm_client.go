@@ -61,14 +61,42 @@ type chatResponse struct {
 			Content string `json:"content"`
 		} `json:"message"`
 	} `json:"choices"`
+	Usage *chatUsage `json:"usage,omitempty"`
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error"`
 }
 
+type chatUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+// LLMCallMeta holds metadata about a single LLM API call for audit purposes.
+type LLMCallMeta struct {
+	Model            string        `json:"model"`
+	DurationMs       int64         `json:"duration_ms"`
+	PromptTokens     int           `json:"prompt_tokens"`
+	CompletionTokens int           `json:"completion_tokens"`
+	TotalTokens      int           `json:"total_tokens"`
+	StatusCode       int           `json:"status_code"`
+	Error            string        `json:"error,omitempty"`
+	PromptVersion    string        `json:"prompt_version,omitempty"`
+}
+
 // ChatJSON sends a system+user prompt to the LLM and returns the raw content string.
 // response_format is set to json_object to force valid JSON output.
 func (c *LLMClient) ChatJSON(ctx context.Context, system, user string) (string, error) {
+	content, _, err := c.ChatJSONWithMeta(ctx, system, user)
+	return content, err
+}
+
+// ChatJSONWithMeta sends a system+user prompt and returns both content and call metadata.
+func (c *LLMClient) ChatJSONWithMeta(ctx context.Context, system, user string) (string, *LLMCallMeta, error) {
+	meta := &LLMCallMeta{Model: c.cfg.Model}
+	start := time.Now()
+
 	reqBody := chatRequest{
 		Model: c.cfg.Model,
 		Messages: []chatMessage{
@@ -83,36 +111,55 @@ func (c *LLMClient) ChatJSON(ctx context.Context, system, user string) (string, 
 	body, _ := json.Marshal(reqBody)
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.cfg.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("create request: %w", err)
+		meta.DurationMs = time.Since(start).Milliseconds()
+		meta.Error = err.Error()
+		return "", meta, fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
-		return "", fmt.Errorf("http call: %w", err)
+		meta.DurationMs = time.Since(start).Milliseconds()
+		meta.Error = err.Error()
+		return "", meta, fmt.Errorf("http call: %w", err)
 	}
 	defer resp.Body.Close()
+	meta.StatusCode = resp.StatusCode
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("read response: %w", err)
+		meta.DurationMs = time.Since(start).Milliseconds()
+		meta.Error = err.Error()
+		return "", meta, fmt.Errorf("read response: %w", err)
 	}
+	meta.DurationMs = time.Since(start).Milliseconds()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("LLM API returned %d: %s", resp.StatusCode, string(respBody))
+		meta.Error = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		return "", meta, fmt.Errorf("LLM API returned %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var chatResp chatResponse
 	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return "", fmt.Errorf("parse response: %w", err)
+		meta.Error = "response parse error"
+		return "", meta, fmt.Errorf("parse response: %w", err)
 	}
 	if chatResp.Error != nil {
-		return "", fmt.Errorf("LLM error: %s", chatResp.Error.Message)
+		meta.Error = chatResp.Error.Message
+		return "", meta, fmt.Errorf("LLM error: %s", chatResp.Error.Message)
 	}
 	if len(chatResp.Choices) == 0 {
-		return "", fmt.Errorf("LLM returned no choices")
+		meta.Error = "no choices"
+		return "", meta, fmt.Errorf("LLM returned no choices")
 	}
 
-	return chatResp.Choices[0].Message.Content, nil
+	// Extract token usage if provided by the API
+	if chatResp.Usage != nil {
+		meta.PromptTokens = chatResp.Usage.PromptTokens
+		meta.CompletionTokens = chatResp.Usage.CompletionTokens
+		meta.TotalTokens = chatResp.Usage.TotalTokens
+	}
+
+	return chatResp.Choices[0].Message.Content, meta, nil
 }

@@ -118,8 +118,8 @@ func main() {
 			}
 		}
 
-		runtime.RegisterLLMRunners(reg, defaultClient, roleClients, logger)
-		logger.Info("LLM agent runners registered", "model", cfg.LLM.Model, "base_url", cfg.LLM.BaseURL)
+		runtime.RegisterLLMRunnersWithFallback(reg, defaultClient, roleClients, logger, cfg.LLM.FallbackEnabled)
+		logger.Info("LLM agent runners registered", "model", cfg.LLM.Model, "base_url", cfg.LLM.BaseURL, "fallback", cfg.LLM.FallbackEnabled)
 	} else {
 		reg.RegisterDefaults()
 		logger.Info("mock agent runners registered (set LLM_ENABLED=true to use LLM)")

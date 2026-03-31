@@ -16,11 +16,12 @@ type Config struct {
 }
 
 type LLMConfig struct {
-	Enabled bool
-	BaseURL string
-	APIKey  string
-	Model   string
-	Roles   map[string]LLMRoleConfig // 按角色覆盖，key 为 "pm"/"supervisor"/"worker"/"reviewer"
+	Enabled         bool
+	FallbackEnabled bool // 当 LLM 调用失败时，是否自动降级到 MockRunner
+	BaseURL         string
+	APIKey          string
+	Model           string
+	Roles           map[string]LLMRoleConfig // 按角色覆盖，key 为 "pm"/"supervisor"/"worker"/"reviewer"
 }
 
 // LLMRoleConfig 是单个角色的 LLM 覆盖配置，空字段回退到全局 LLMConfig。
@@ -145,11 +146,12 @@ func loadLLMConfig() LLMConfig {
 	}
 
 	return LLMConfig{
-		Enabled: getEnv("LLM_ENABLED", "false") == "true",
-		BaseURL: globalBaseURL,
-		APIKey:  globalAPIKey,
-		Model:   globalModel,
-		Roles:   roles,
+		Enabled:         getEnv("LLM_ENABLED", "false") == "true",
+		FallbackEnabled: getEnv("LLM_FALLBACK_ENABLED", "true") == "true",
+		BaseURL:         globalBaseURL,
+		APIKey:          globalAPIKey,
+		Model:           globalModel,
+		Roles:           roles,
 	}
 }
 

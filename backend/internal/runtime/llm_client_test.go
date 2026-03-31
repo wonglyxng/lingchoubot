@@ -225,3 +225,104 @@ func containsHelper(s, substr string) bool {
 	}
 	return false
 }
+
+func TestLLMClient_ChatJSONWithMeta_Success(t *testing.T) {
+	expected := `{"status":"success","summary":"test"}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"content": expected}},
+			},
+			"usage": map[string]int{
+				"prompt_tokens":     100,
+				"completion_tokens": 50,
+				"total_tokens":      150,
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewLLMClient(LLMClientConfig{
+		BaseURL: server.URL,
+		APIKey:  "test-key",
+		Model:   "test-model",
+	})
+
+	content, meta, err := client.ChatJSONWithMeta(context.Background(), "sys", "usr")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if content != expected {
+		t.Errorf("expected %q, got %q", expected, content)
+	}
+	if meta == nil {
+		t.Fatal("expected non-nil meta")
+	}
+	if meta.Model != "test-model" {
+		t.Errorf("expected model test-model, got %s", meta.Model)
+	}
+	if meta.DurationMs < 0 {
+		t.Error("expected non-negative duration")
+	}
+	if meta.PromptTokens != 100 {
+		t.Errorf("expected 100 prompt tokens, got %d", meta.PromptTokens)
+	}
+	if meta.CompletionTokens != 50 {
+		t.Errorf("expected 50 completion tokens, got %d", meta.CompletionTokens)
+	}
+	if meta.TotalTokens != 150 {
+		t.Errorf("expected 150 total tokens, got %d", meta.TotalTokens)
+	}
+	if meta.StatusCode != 200 {
+		t.Errorf("expected status 200, got %d", meta.StatusCode)
+	}
+	if meta.Error != "" {
+		t.Errorf("expected no error, got %s", meta.Error)
+	}
+}
+
+func TestLLMClient_ChatJSONWithMeta_Error(t *testing.T) {
+	client := NewLLMClient(LLMClientConfig{
+		BaseURL: "http://127.0.0.1:1",
+		APIKey:  "key",
+		Model:   "model",
+	})
+
+	_, meta, err := client.ChatJSONWithMeta(context.Background(), "sys", "usr")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if meta == nil {
+		t.Fatal("expected non-nil meta even on error")
+	}
+	if meta.Error == "" {
+		t.Error("meta should have error message on failure")
+	}
+	if meta.Model != "model" {
+		t.Errorf("meta should have model even on failure, got %s", meta.Model)
+	}
+}
+
+func TestLLMClient_ChatJSONWithMeta_HTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(`rate limited`))
+	}))
+	defer server.Close()
+
+	client := NewLLMClient(LLMClientConfig{
+		BaseURL: server.URL,
+		APIKey:  "key",
+		Model:   "model",
+	})
+
+	_, meta, err := client.ChatJSONWithMeta(context.Background(), "sys", "usr")
+	if err == nil {
+		t.Fatal("expected error for HTTP 429")
+	}
+	if meta.StatusCode != 429 {
+		t.Errorf("expected status_code 429, got %d", meta.StatusCode)
+	}
+}
