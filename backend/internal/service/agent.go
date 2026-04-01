@@ -2,10 +2,16 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/lib/pq"
 	"github.com/lingchou/lingchoubot/backend/internal/model"
 )
+
+var ErrAgentRoleCodeConflict = errors.New("agent role_code already exists")
+
+const agentRoleCodeUniqueIndex = "uq_agent_role_code_non_empty"
 
 type AgentService struct {
 	repo  AgentRepository
@@ -17,6 +23,25 @@ func NewAgentService(repo AgentRepository, audit *AuditService) *AgentService {
 }
 
 func (s *AgentService) Create(ctx context.Context, a *model.Agent) error {
+	if err := normalizeAgentForWrite(a); err != nil {
+		return err
+	}
+	if err := s.ensureRoleCodeAvailable(ctx, "", a.RoleCode); err != nil {
+		return err
+	}
+	if err := s.repo.Create(ctx, a); err != nil {
+		if isAgentRoleCodeUniqueViolation(err) {
+			return fmt.Errorf("%w: %s", ErrAgentRoleCodeConflict, a.RoleCode)
+		}
+		return fmt.Errorf("create agent: %w", err)
+	}
+	s.audit.LogEvent(ctx, "user", "", "agent.created",
+		fmt.Sprintf("Agent「%s」(%s/%s) 已注册", a.Name, a.Role, a.Specialization),
+		"agent", a.ID, nil, a)
+	return nil
+}
+
+func normalizeAgentForWrite(a *model.Agent) error {
 	if a.Name == "" {
 		return fmt.Errorf("agent name is required")
 	}
@@ -50,12 +75,6 @@ func (s *AgentService) Create(ctx context.Context, a *model.Agent) error {
 	if len(a.Metadata) == 0 {
 		a.Metadata = model.JSON("{}")
 	}
-	if err := s.repo.Create(ctx, a); err != nil {
-		return fmt.Errorf("create agent: %w", err)
-	}
-	s.audit.LogEvent(ctx, "user", "", "agent.created",
-		fmt.Sprintf("Agent「%s」(%s/%s) 已注册", a.Name, a.Role, a.Specialization),
-		"agent", a.ID, nil, a)
 	return nil
 }
 
@@ -75,7 +94,16 @@ func (s *AgentService) Update(ctx context.Context, a *model.Agent) error {
 	if old == nil {
 		return fmt.Errorf("agent not found")
 	}
+	if err := normalizeAgentForWrite(a); err != nil {
+		return err
+	}
+	if err := s.ensureRoleCodeAvailable(ctx, a.ID, a.RoleCode); err != nil {
+		return err
+	}
 	if err := s.repo.Update(ctx, a); err != nil {
+		if isAgentRoleCodeUniqueViolation(err) {
+			return fmt.Errorf("%w: %s", ErrAgentRoleCodeConflict, a.RoleCode)
+		}
 		return fmt.Errorf("update agent: %w", err)
 	}
 	s.audit.LogEvent(ctx, "user", "", "agent.updated",
@@ -127,4 +155,27 @@ func defaultRoleCode(role model.AgentRole) model.RoleCode {
 	default:
 		return ""
 	}
+}
+
+func (s *AgentService) ensureRoleCodeAvailable(ctx context.Context, agentID string, roleCode model.RoleCode) error {
+	if roleCode == "" {
+		return nil
+	}
+
+	existing, err := s.repo.GetByRoleCode(ctx, roleCode)
+	if err != nil {
+		return fmt.Errorf("query agent by role_code: %w", err)
+	}
+	if existing != nil && existing.ID != agentID {
+		return fmt.Errorf("%w: %s", ErrAgentRoleCodeConflict, roleCode)
+	}
+	return nil
+}
+
+func isAgentRoleCodeUniqueViolation(err error) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) {
+		return false
+	}
+	return string(pqErr.Code) == "23505" && pqErr.Constraint == agentRoleCodeUniqueIndex
 }

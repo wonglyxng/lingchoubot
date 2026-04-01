@@ -54,6 +54,22 @@ func (r *AgentRepo) GetByID(ctx context.Context, id string) (*model.Agent, error
 	return a, nil
 }
 
+func (r *AgentRepo) GetByRoleCode(ctx context.Context, roleCode model.RoleCode) (*model.Agent, error) {
+	q := `SELECT ` + agentColumns + `
+		FROM agent
+		WHERE role_code = $1
+		ORDER BY created_at
+		LIMIT 1`
+	a, err := scanAgent(r.db.QueryRowContext(ctx, q, roleCode))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("agent.GetByRoleCode: %w", err)
+	}
+	return a, nil
+}
+
 func (r *AgentRepo) List(ctx context.Context, limit, offset int) ([]*model.Agent, int, error) {
 	var total int
 	if err := r.db.QueryRowContext(ctx, `SELECT count(*) FROM agent`).Scan(&total); err != nil {

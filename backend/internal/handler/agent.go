@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/lingchou/lingchoubot/backend/internal/middleware"
@@ -34,6 +35,10 @@ func (h *AgentHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.Create(r.Context(), &a); err != nil {
+		if errors.Is(err, service.ErrAgentRoleCodeConflict) {
+			middleware.ErrorJSON(w, http.StatusConflict, "ROLE_CODE_CONFLICT", err.Error())
+			return
+		}
 		middleware.ErrorJSON(w, http.StatusBadRequest, "CREATE_FAILED", err.Error())
 		return
 	}
@@ -76,6 +81,10 @@ func (h *AgentHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	a.ID = id
 	if err := h.svc.Update(r.Context(), &a); err != nil {
+		if errors.Is(err, service.ErrAgentRoleCodeConflict) {
+			middleware.ErrorJSON(w, http.StatusConflict, "ROLE_CODE_CONFLICT", err.Error())
+			return
+		}
 		middleware.ErrorJSON(w, http.StatusBadRequest, "UPDATE_FAILED", err.Error())
 		return
 	}

@@ -191,6 +191,17 @@ func (r *FakeAgentRepo) GetByID(_ context.Context, id string) (*model.Agent, err
 	cp := *a
 	return &cp, nil
 }
+func (r *FakeAgentRepo) GetByRoleCode(_ context.Context, roleCode model.RoleCode) (*model.Agent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, a := range r.agents {
+		if a.RoleCode == roleCode {
+			cp := *a
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
 func (r *FakeAgentRepo) List(_ context.Context, limit, offset int) ([]*model.Agent, int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

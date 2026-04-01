@@ -29,6 +29,7 @@ type PhaseRepository interface {
 type AgentRepository interface {
 	Create(ctx context.Context, a *model.Agent) error
 	GetByID(ctx context.Context, id string) (*model.Agent, error)
+	GetByRoleCode(ctx context.Context, roleCode model.RoleCode) (*model.Agent, error)
 	List(ctx context.Context, limit, offset int) ([]*model.Agent, int, error)
 	Update(ctx context.Context, a *model.Agent) error
 	Delete(ctx context.Context, id string) error

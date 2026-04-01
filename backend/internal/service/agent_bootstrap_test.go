@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -34,6 +35,16 @@ func (r *bootstrapAgentRepo) GetByID(_ context.Context, id string) (*model.Agent
 	}
 	copyAgent := *agent
 	return &copyAgent, nil
+}
+
+func (r *bootstrapAgentRepo) GetByRoleCode(_ context.Context, roleCode model.RoleCode) (*model.Agent, error) {
+	for _, agent := range r.agents {
+		if agent.RoleCode == roleCode {
+			copyAgent := *agent
+			return &copyAgent, nil
+		}
+	}
+	return nil, nil
 }
 
 func (r *bootstrapAgentRepo) List(_ context.Context, _, _ int) ([]*model.Agent, int, error) {
@@ -182,5 +193,73 @@ func TestEnsureBaselineAgentsCreatesOnlyMissingEntries(t *testing.T) {
 		if (agent.RoleCode == model.RoleCodeDevelopmentSupervisor || agent.RoleCode == model.RoleCodeQASupervisor) && (agent.ReportsTo == nil || *agent.ReportsTo != "pm-existing") {
 			t.Fatalf("supervisor %s should report to existing PM", agent.RoleCode)
 		}
+	}
+}
+
+func TestAgentServiceCreateRejectsDuplicateRoleCode(t *testing.T) {
+	ctx := context.Background()
+	auditSvc, _ := newTestAuditService()
+	repo := &bootstrapAgentRepo{agents: map[string]*model.Agent{
+		"pm-existing": {
+			ID:             "pm-existing",
+			Name:           "Existing PM",
+			Role:           model.AgentRolePM,
+			RoleCode:       model.RoleCodePMSupervisor,
+			Status:         model.AgentStatusInactive,
+			AgentType:      model.AgentTypeLLM,
+			Specialization: model.AgentSpecGeneral,
+		},
+	}}
+	svc := NewAgentService(repo, auditSvc)
+
+	err := svc.Create(ctx, &model.Agent{
+		Name:           "Another PM",
+		Role:           model.AgentRolePM,
+		RoleCode:       model.RoleCodePMSupervisor,
+		Status:         model.AgentStatusActive,
+		AgentType:      model.AgentTypeMock,
+		Specialization: model.AgentSpecGeneral,
+	})
+	if !errors.Is(err, ErrAgentRoleCodeConflict) {
+		t.Fatalf("Create error = %v, want ErrAgentRoleCodeConflict", err)
+	}
+}
+
+func TestAgentServiceUpdateRejectsDuplicateRoleCode(t *testing.T) {
+	ctx := context.Background()
+	auditSvc, _ := newTestAuditService()
+	repo := &bootstrapAgentRepo{agents: map[string]*model.Agent{
+		"pm-existing": {
+			ID:             "pm-existing",
+			Name:           "Existing PM",
+			Role:           model.AgentRolePM,
+			RoleCode:       model.RoleCodePMSupervisor,
+			Status:         model.AgentStatusActive,
+			AgentType:      model.AgentTypeLLM,
+			Specialization: model.AgentSpecGeneral,
+		},
+		"worker-existing": {
+			ID:             "worker-existing",
+			Name:           "Backend Worker",
+			Role:           model.AgentRoleWorker,
+			RoleCode:       model.RoleCodeBackendDevWorker,
+			Status:         model.AgentStatusActive,
+			AgentType:      model.AgentTypeMock,
+			Specialization: model.AgentSpecBackend,
+		},
+	}}
+	svc := NewAgentService(repo, auditSvc)
+
+	err := svc.Update(ctx, &model.Agent{
+		ID:             "worker-existing",
+		Name:           "Backend Worker",
+		Role:           model.AgentRoleWorker,
+		RoleCode:       model.RoleCodePMSupervisor,
+		Status:         model.AgentStatusActive,
+		AgentType:      model.AgentTypeMock,
+		Specialization: model.AgentSpecBackend,
+	})
+	if !errors.Is(err, ErrAgentRoleCodeConflict) {
+		t.Fatalf("Update error = %v, want ErrAgentRoleCodeConflict", err)
 	}
 }
