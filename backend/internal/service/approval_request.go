@@ -55,8 +55,8 @@ func (s *ApprovalRequestService) List(ctx context.Context, p repository.Approval
 }
 
 // Decide approves or rejects a pending approval request.
-// If approved and linked to a task in in_review, advances it to completed.
-// If rejected and linked to a task in in_review, moves it to revision_required.
+// If approved and linked to a task in pending_approval, advances it to completed.
+// If rejected and linked to a task in pending_approval, moves it to revision_required.
 func (s *ApprovalRequestService) Decide(ctx context.Context, id string, status model.ApprovalStatus, note string) error {
 	if status != model.ApprovalStatusApproved && status != model.ApprovalStatusRejected {
 		return fmt.Errorf("decision must be 'approved' or 'rejected'")

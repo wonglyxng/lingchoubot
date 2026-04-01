@@ -18,6 +18,7 @@ const (
 	TaskStatusAssigned         TaskStatus = "assigned"
 	TaskStatusInProgress       TaskStatus = "in_progress"
 	TaskStatusInReview         TaskStatus = "in_review"
+	TaskStatusPendingApproval  TaskStatus = "pending_approval"
 	TaskStatusRevisionRequired TaskStatus = "revision_required"
 	TaskStatusCompleted        TaskStatus = "completed"
 	TaskStatusFailed           TaskStatus = "failed"
@@ -29,7 +30,8 @@ var validTaskTransitions = map[TaskStatus][]TaskStatus{
 	TaskStatusPending:          {TaskStatusAssigned, TaskStatusCancelled},
 	TaskStatusAssigned:         {TaskStatusInProgress, TaskStatusCancelled},
 	TaskStatusInProgress:       {TaskStatusInReview, TaskStatusCompleted, TaskStatusFailed, TaskStatusBlocked, TaskStatusCancelled},
-	TaskStatusInReview:         {TaskStatusCompleted, TaskStatusRevisionRequired, TaskStatusFailed},
+	TaskStatusInReview:         {TaskStatusPendingApproval, TaskStatusRevisionRequired, TaskStatusFailed},
+	TaskStatusPendingApproval:  {TaskStatusCompleted, TaskStatusRevisionRequired, TaskStatusFailed},
 	TaskStatusRevisionRequired: {TaskStatusInProgress, TaskStatusCancelled},
 	TaskStatusBlocked:          {TaskStatusInProgress, TaskStatusCancelled},
 	TaskStatusFailed:           {TaskStatusPending, TaskStatusCancelled},

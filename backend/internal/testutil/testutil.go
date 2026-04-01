@@ -1085,6 +1085,7 @@ func NewFixture() *Fixture {
 	handoffSvc := service.NewHandoffSnapshotService(handoffRepo, auditSvc)
 	reviewSvc := service.NewReviewReportService(reviewRepo, taskSvc, auditSvc)
 	approvalSvc := service.NewApprovalRequestService(approvalRepo, taskSvc, auditSvc)
+	reviewSvc.SetApprovalService(approvalSvc)
 	toolCallSvc := service.NewToolCallService(toolCallRepo, auditSvc)
 	workflowSvc := service.NewWorkflowService(runRepo, stepRepo, auditSvc)
 

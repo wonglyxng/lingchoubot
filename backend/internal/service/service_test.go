@@ -168,6 +168,43 @@ type fakeWorkflowRunRepo struct {
 	lastUpdatedRun    *model.WorkflowRun
 }
 
+type fakeReviewRepo struct {
+	reviews map[string]*model.ReviewReport
+}
+
+func (r *fakeReviewRepo) Create(_ context.Context, rr *model.ReviewReport) error {
+	if rr.ID == "" {
+		rr.ID = fmt.Sprintf("review-%d", len(r.reviews)+1)
+	}
+	if r.reviews == nil {
+		r.reviews = map[string]*model.ReviewReport{}
+	}
+	copyRR := *rr
+	r.reviews[copyRR.ID] = &copyRR
+	return nil
+}
+
+func (r *fakeReviewRepo) GetByID(_ context.Context, id string) (*model.ReviewReport, error) {
+	if r.reviews == nil {
+		return nil, nil
+	}
+	rr := r.reviews[id]
+	if rr == nil {
+		return nil, nil
+	}
+	copyRR := *rr
+	return &copyRR, nil
+}
+
+func (r *fakeReviewRepo) List(_ context.Context, _ repository.ReviewListParams) ([]*model.ReviewReport, int, error) {
+	items := make([]*model.ReviewReport, 0, len(r.reviews))
+	for _, rr := range r.reviews {
+		copyRR := *rr
+		items = append(items, &copyRR)
+	}
+	return items, len(items), nil
+}
+
 func (r *fakeWorkflowRunRepo) Create(_ context.Context, run *model.WorkflowRun) error {
 	r.createCalls++
 	copyRun := *run
@@ -347,7 +384,7 @@ func TestApprovalRequestServiceDecideTransitionsTask(t *testing.T) {
 					taskID: {
 						ID:        taskID,
 						Title:     "交付评审",
-						Status:    model.TaskStatusInReview,
+						Status:    model.TaskStatusPendingApproval,
 						ProjectID: "proj-1",
 					},
 				},
@@ -391,6 +428,92 @@ func TestApprovalRequestServiceDecideTransitionsTask(t *testing.T) {
 				t.Fatalf("expected second audit event task.status_changed, got %q", auditRepo.entries[1].EventType)
 			}
 		})
+	}
+}
+
+func TestReviewReportApprovedCreatesApprovalAndTransitionsTask(t *testing.T) {
+	ctx := context.Background()
+	auditSvc, _ := newTestAuditService()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[string]*model.Task{
+			"task-1": {
+				ID:        "task-1",
+				Title:     "API 设计",
+				Status:    model.TaskStatusInReview,
+				ProjectID: "proj-1",
+			},
+		},
+	}
+	approvalRepo := &fakeApprovalRepo{}
+	reviewRepo := &fakeReviewRepo{}
+	taskSvc := &TaskService{repo: taskRepo, audit: auditSvc}
+	approvalSvc := &ApprovalRequestService{repo: approvalRepo, taskSvc: taskSvc, audit: auditSvc}
+	reviewSvc := &ReviewReportService{repo: reviewRepo, taskSvc: taskSvc, approvalSvc: approvalSvc, audit: auditSvc}
+
+	rr := &model.ReviewReport{
+		TaskID:     "task-1",
+		ReviewerID: "reviewer-1",
+		Verdict:    model.ReviewVerdictApproved,
+		Summary:    "looks good",
+	}
+	if err := reviewSvc.Create(ctx, rr); err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	// Task should be in pending_approval
+	if got := taskRepo.tasks["task-1"].Status; got != model.TaskStatusPendingApproval {
+		t.Fatalf("expected task status %q, got %q", model.TaskStatusPendingApproval, got)
+	}
+	// An approval request should have been created
+	if len(approvalRepo.approvals) != 1 {
+		t.Fatalf("expected 1 approval request, got %d", len(approvalRepo.approvals))
+	}
+	for _, ar := range approvalRepo.approvals {
+		if ar.TaskID == nil || *ar.TaskID != "task-1" {
+			t.Fatalf("approval request task_id mismatch")
+		}
+		if ar.ProjectID != "proj-1" {
+			t.Fatalf("approval request project_id = %q, want %q", ar.ProjectID, "proj-1")
+		}
+	}
+}
+
+func TestReviewReportRejectedDoesNotCreateApproval(t *testing.T) {
+	ctx := context.Background()
+	auditSvc, _ := newTestAuditService()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[string]*model.Task{
+			"task-1": {
+				ID:        "task-1",
+				Title:     "API 设计",
+				Status:    model.TaskStatusInReview,
+				ProjectID: "proj-1",
+			},
+		},
+	}
+	approvalRepo := &fakeApprovalRepo{}
+	reviewRepo := &fakeReviewRepo{}
+	taskSvc := &TaskService{repo: taskRepo, audit: auditSvc}
+	approvalSvc := &ApprovalRequestService{repo: approvalRepo, taskSvc: taskSvc, audit: auditSvc}
+	reviewSvc := &ReviewReportService{repo: reviewRepo, taskSvc: taskSvc, approvalSvc: approvalSvc, audit: auditSvc}
+
+	rr := &model.ReviewReport{
+		TaskID:     "task-1",
+		ReviewerID: "reviewer-1",
+		Verdict:    model.ReviewVerdictRejected,
+		Summary:    "needs work",
+	}
+	if err := reviewSvc.Create(ctx, rr); err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	// Task should be in revision_required
+	if got := taskRepo.tasks["task-1"].Status; got != model.TaskStatusRevisionRequired {
+		t.Fatalf("expected task status %q, got %q", model.TaskStatusRevisionRequired, got)
+	}
+	// No approval request should have been created
+	if len(approvalRepo.approvals) != 0 {
+		t.Fatalf("expected 0 approval requests, got %d", len(approvalRepo.approvals))
 	}
 }
 

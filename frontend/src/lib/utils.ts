@@ -10,6 +10,7 @@ const taskStatusMap: Record<string, StatusDef> = {
   assigned:           { label: "已分派", variant: "info" },
   in_progress:        { label: "进行中", variant: "info" },
   in_review:          { label: "评审中", variant: "warning" },
+  pending_approval:    { label: "待审批", variant: "warning" },
   revision_required:  { label: "需修订", variant: "error" },
   completed:          { label: "已完成", variant: "success" },
   failed:             { label: "失败",   variant: "error" },

@@ -9,13 +9,21 @@ import (
 )
 
 type ReviewReportService struct {
-	repo    ReviewReportRepository
-	taskSvc *TaskService
-	audit   *AuditService
+	repo        ReviewReportRepository
+	taskSvc     *TaskService
+	approvalSvc *ApprovalRequestService
+	audit       *AuditService
 }
 
 func NewReviewReportService(repo ReviewReportRepository, taskSvc *TaskService, audit *AuditService) *ReviewReportService {
 	return &ReviewReportService{repo: repo, taskSvc: taskSvc, audit: audit}
+}
+
+// SetApprovalService injects the approval service for auto-creating approval
+// requests when a review verdict is approved. Called after both services are
+// constructed to avoid circular init dependencies.
+func (s *ReviewReportService) SetApprovalService(approvalSvc *ApprovalRequestService) {
+	s.approvalSvc = approvalSvc
 }
 
 // Create persists a review report and, if the verdict is negative, transitions
@@ -51,6 +59,28 @@ func (s *ReviewReportService) Create(ctx context.Context, rr *model.ReviewReport
 	if rr.Verdict == model.ReviewVerdictRejected || rr.Verdict == model.ReviewVerdictNeedsRevision {
 		if err := s.taskSvc.TransitionStatus(ctx, rr.TaskID, model.TaskStatusRevisionRequired); err != nil {
 			return fmt.Errorf("auto-transition task to revision_required: %w", err)
+		}
+	}
+
+	// Approved: advance task to pending_approval and auto-create an approval request.
+	if rr.Verdict == model.ReviewVerdictApproved {
+		if err := s.taskSvc.TransitionStatus(ctx, rr.TaskID, model.TaskStatusPendingApproval); err != nil {
+			return fmt.Errorf("auto-transition task to pending_approval: %w", err)
+		}
+		if s.approvalSvc != nil {
+			task, _ := s.taskSvc.GetByID(ctx, rr.TaskID)
+			if task != nil {
+				ar := &model.ApprovalRequest{
+					ProjectID:   task.ProjectID,
+					TaskID:      &rr.TaskID,
+					RequestedBy: rr.ReviewerID,
+					Title:       fmt.Sprintf("任务「%s」评审通过，请审批", task.Title),
+					Description: fmt.Sprintf("评审报告 %s 结论为通过，等待审批确认", rr.ID),
+				}
+				if err := s.approvalSvc.Create(ctx, ar); err != nil {
+					return fmt.Errorf("auto-create approval request: %w", err)
+				}
+			}
 		}
 	}
 

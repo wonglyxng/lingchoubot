@@ -54,10 +54,10 @@ func TestIntegration_HappyPath(t *testing.T) {
 		t.Fatalf("tasks = %d, want 9", len(allTasks))
 	}
 
-	// Every task should have been reviewed (status in_review, since mock reviewer approves)
+	// Every task should have been reviewed and advanced to pending_approval (since mock reviewer approves)
 	for _, task := range allTasks {
-		if task.Status != model.TaskStatusInReview {
-			t.Errorf("task %q status = %q, want %q", task.Title, task.Status, model.TaskStatusInReview)
+		if task.Status != model.TaskStatusPendingApproval {
+			t.Errorf("task %q status = %q, want %q", task.Title, task.Status, model.TaskStatusPendingApproval)
 		}
 	}
 

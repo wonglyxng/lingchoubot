@@ -14,6 +14,7 @@ const MAIN_STATUSES = [
   "assigned",
   "in_progress",
   "in_review",
+  "pending_approval",
   "completed",
 ] as const;
 

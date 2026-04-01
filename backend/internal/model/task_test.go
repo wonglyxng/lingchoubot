@@ -30,12 +30,20 @@ func TestTaskStatusCanTransitionTo(t *testing.T) {
 		{TaskStatusInProgress, TaskStatusAssigned, false},
 
 		// in_review
-		{TaskStatusInReview, TaskStatusCompleted, true},
+		{TaskStatusInReview, TaskStatusPendingApproval, true},
 		{TaskStatusInReview, TaskStatusRevisionRequired, true},
 		{TaskStatusInReview, TaskStatusFailed, true},
+		{TaskStatusInReview, TaskStatusCompleted, false},
 		{TaskStatusInReview, TaskStatusInProgress, false},
 		{TaskStatusInReview, TaskStatusCancelled, false},
 		{TaskStatusInReview, TaskStatusPending, false},
+
+		// pending_approval
+		{TaskStatusPendingApproval, TaskStatusCompleted, true},
+		{TaskStatusPendingApproval, TaskStatusRevisionRequired, true},
+		{TaskStatusPendingApproval, TaskStatusFailed, true},
+		{TaskStatusPendingApproval, TaskStatusInProgress, false},
+		{TaskStatusPendingApproval, TaskStatusPending, false},
 
 		// revision_required
 		{TaskStatusRevisionRequired, TaskStatusInProgress, true},
@@ -78,6 +86,7 @@ func TestTaskStatusConstants(t *testing.T) {
 		TaskStatusAssigned,
 		TaskStatusInProgress,
 		TaskStatusInReview,
+		TaskStatusPendingApproval,
 		TaskStatusRevisionRequired,
 		TaskStatusCompleted,
 		TaskStatusFailed,

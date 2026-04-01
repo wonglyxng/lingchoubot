@@ -63,9 +63,12 @@ func TestTaskStatusTransitions_Comprehensive(t *testing.T) {
 		{TaskStatusInProgress, TaskStatusFailed},
 		{TaskStatusInProgress, TaskStatusBlocked},
 		{TaskStatusInProgress, TaskStatusCancelled},
-		{TaskStatusInReview, TaskStatusCompleted},
+		{TaskStatusInReview, TaskStatusPendingApproval},
 		{TaskStatusInReview, TaskStatusRevisionRequired},
 		{TaskStatusInReview, TaskStatusFailed},
+		{TaskStatusPendingApproval, TaskStatusCompleted},
+		{TaskStatusPendingApproval, TaskStatusRevisionRequired},
+		{TaskStatusPendingApproval, TaskStatusFailed},
 		{TaskStatusRevisionRequired, TaskStatusInProgress},
 		{TaskStatusRevisionRequired, TaskStatusCancelled},
 		{TaskStatusBlocked, TaskStatusInProgress},
@@ -94,6 +97,7 @@ func TestTaskStatusTransitions_Comprehensive(t *testing.T) {
 		{TaskStatusCancelled, TaskStatusInProgress},
 		{TaskStatusInReview, TaskStatusPending},
 		{TaskStatusInReview, TaskStatusAssigned},
+		{TaskStatusInReview, TaskStatusCompleted},
 		{TaskStatusBlocked, TaskStatusCompleted},
 	}
 	for _, c := range invalidCases {
@@ -105,7 +109,7 @@ func TestTaskStatusTransitions_Comprehensive(t *testing.T) {
 	// Self-transitions should be invalid
 	allStatuses := []TaskStatus{
 		TaskStatusPending, TaskStatusAssigned, TaskStatusInProgress,
-		TaskStatusInReview, TaskStatusRevisionRequired, TaskStatusCompleted,
+		TaskStatusInReview, TaskStatusPendingApproval, TaskStatusRevisionRequired, TaskStatusCompleted,
 		TaskStatusFailed, TaskStatusCancelled, TaskStatusBlocked,
 	}
 	for _, s := range allStatuses {

@@ -62,6 +62,7 @@ func main() {
 	artifactSvc := service.NewArtifactService(artifactRepo, artifactVerRepo, auditSvc)
 	reviewSvc := service.NewReviewReportService(reviewRepo, taskSvc, auditSvc)
 	approvalSvc := service.NewApprovalRequestService(approvalRepo, taskSvc, auditSvc)
+	reviewSvc.SetApprovalService(approvalSvc)
 	toolCallSvc := service.NewToolCallService(toolCallRepo, auditSvc)
 
 	// --- handlers ---
