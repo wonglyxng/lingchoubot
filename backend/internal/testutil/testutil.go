@@ -1159,89 +1159,18 @@ func NewFixture() *Fixture {
 
 // SeedStandardAgents creates the standard set of agents for a complete workflow.
 func (f *Fixture) SeedStandardAgents(ctx context.Context) error {
-	agents := []*model.Agent{
-		{
-			Name:           "PM Agent",
-			Role:           model.AgentRolePM,
-			RoleCode:       model.RoleCodePMSupervisor,
-			AgentType:      model.AgentTypeMock,
-			Status:         model.AgentStatusActive,
-			Specialization: model.AgentSpecGeneral,
-			ManagedRoles:   model.JSON(`["dev_supervisor","qa_supervisor"]`),
-			AllowedTools:   model.JSON(`["doc_generator"]`),
-			Capabilities:   model.JSON(`{}`),
-		},
-		{
-			Name:           "Dev Supervisor",
-			Role:           model.AgentRoleSupervisor,
-			RoleCode:       model.RoleCodeDevelopmentSupervisor,
-			AgentType:      model.AgentTypeMock,
-			Status:         model.AgentStatusActive,
-			Specialization: model.AgentSpecGeneral,
-			ManagedRoles:   model.JSON(`["backend_worker","frontend_worker"]`),
-			AllowedTools:   model.JSON(`["doc_generator"]`),
-			Capabilities:   model.JSON(`{}`),
-		},
-		{
-			Name:           "QA Supervisor",
-			Role:           model.AgentRoleSupervisor,
-			RoleCode:       model.RoleCodeQASupervisor,
-			AgentType:      model.AgentTypeMock,
-			Status:         model.AgentStatusActive,
-			Specialization: model.AgentSpecQA,
-			ManagedRoles:   model.JSON(`["qa_worker"]`),
-			AllowedTools:   model.JSON(`["test_runner"]`),
-			Capabilities:   model.JSON(`{}`),
-		},
-		{
-			Name:           "Backend Worker",
-			Role:           model.AgentRoleWorker,
-			RoleCode:       model.RoleCodeBackendDevWorker,
-			AgentType:      model.AgentTypeMock,
-			Status:         model.AgentStatusActive,
-			Specialization: model.AgentSpecBackend,
-			ManagedRoles:   model.JSON(`[]`),
-			AllowedTools:   model.JSON(`["doc_generator","artifact_storage"]`),
-			Capabilities:   model.JSON(`{}`),
-		},
-		{
-			Name:           "Frontend Worker",
-			Role:           model.AgentRoleWorker,
-			RoleCode:       model.RoleCodeFrontendDevWorker,
-			AgentType:      model.AgentTypeMock,
-			Status:         model.AgentStatusActive,
-			Specialization: model.AgentSpecFrontend,
-			ManagedRoles:   model.JSON(`[]`),
-			AllowedTools:   model.JSON(`["doc_generator","artifact_storage"]`),
-			Capabilities:   model.JSON(`{}`),
-		},
-		{
-			Name:           "QA Worker",
-			Role:           model.AgentRoleWorker,
-			RoleCode:       model.RoleCodeQAWorker,
-			AgentType:      model.AgentTypeMock,
-			Status:         model.AgentStatusActive,
-			Specialization: model.AgentSpecQA,
-			ManagedRoles:   model.JSON(`[]`),
-			AllowedTools:   model.JSON(`["test_runner"]`),
-			Capabilities:   model.JSON(`{}`),
-		},
-		{
-			Name:           "Reviewer Agent",
-			Role:           model.AgentRoleReviewer,
-			RoleCode:       model.RoleCodeReviewerWorker,
-			AgentType:      model.AgentTypeMock,
-			Status:         model.AgentStatusActive,
-			Specialization: model.AgentSpecGeneral,
-			ManagedRoles:   model.JSON(`[]`),
-			AllowedTools:   model.JSON(`[]`),
-			Capabilities:   model.JSON(`{}`),
-		},
-	}
-	for _, a := range agents {
-		if err := f.AgentSvc.Create(ctx, a); err != nil {
-			return fmt.Errorf("seed agent %s: %w", a.Name, err)
+	byRoleCode := make(map[model.RoleCode]string)
+	for _, spec := range service.BaselineAgentSpecs() {
+		agent := spec.Agent
+		if spec.ReportsToRoleCode != "" {
+			if parentID, ok := byRoleCode[spec.ReportsToRoleCode]; ok {
+				agent.ReportsTo = &parentID
+			}
 		}
+		if err := f.AgentSvc.Create(ctx, &agent); err != nil {
+			return fmt.Errorf("seed agent %s: %w", agent.Name, err)
+		}
+		byRoleCode[agent.RoleCode] = agent.ID
 	}
 	return nil
 }

@@ -88,6 +88,28 @@ MVP 阶段不需要一次实现所有角色。建议分两批：
 - 安全主管 Agent
 - 文档主管 Agent
 
+### 当前系统默认基线 Agent
+
+为降低初次启动与联调成本，当前后端 API 服务启动时会自动补齐一组最小可运行的基础 Agent。补齐逻辑按 `role_code` 幂等执行：
+
+- 已存在对应 `role_code` 的 Agent 时不重复创建
+- 仅补齐缺失角色
+- 自动建立最小汇报链路 `reports_to`
+
+当前默认基线角色如下：
+
+| Agent | role_code | 上级 | 用途 |
+|------|------|------|------|
+| PM Agent | `PM_SUPERVISOR` | 无 | 项目级规划、协调与汇总 |
+| Development Supervisor | `DEVELOPMENT_SUPERVISOR` | `PM_SUPERVISOR` | 统筹开发域任务分派与返工协调 |
+| QA Supervisor | `QA_SUPERVISOR` | `PM_SUPERVISOR` | 统筹质量门、测试与评审 |
+| Backend Worker | `BACKEND_DEV_WORKER` | `DEVELOPMENT_SUPERVISOR` | 负责后端实现 |
+| Frontend Worker | `FRONTEND_DEV_WORKER` | `DEVELOPMENT_SUPERVISOR` | 负责前端实现 |
+| QA Worker | `QA_WORKER` | `QA_SUPERVISOR` | 负责测试执行与回归验证 |
+| Reviewer Agent | `REVIEWER_WORKER` | `QA_SUPERVISOR` | 负责独立评审 |
+
+这组基线角色用于保证 MVP 工作流在开箱状态下具备最小可运行组织树；后续如需更细分角色，可在此基础上继续扩展，而不是替代现有基线启动逻辑。
+
 ---
 
 ## 5. 角色分类

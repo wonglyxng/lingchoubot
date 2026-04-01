@@ -65,6 +65,15 @@ func main() {
 	reviewSvc.SetApprovalService(approvalSvc)
 	toolCallSvc := service.NewToolCallService(toolCallRepo, auditSvc)
 
+	bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer bootstrapCancel()
+	createdAgents, err := agentSvc.EnsureBaselineAgents(bootstrapCtx)
+	if err != nil {
+		logger.Error("failed to bootstrap baseline agents", "error", err)
+	} else if len(createdAgents) > 0 {
+		logger.Info("baseline agents bootstrapped", "created", len(createdAgents))
+	}
+
 	// --- handlers ---
 	mux := http.NewServeMux()
 
