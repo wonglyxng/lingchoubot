@@ -12,6 +12,10 @@ function renderList(data: unknown): string {
   return JSON.stringify(data);
 }
 
+function shortId(value?: string): string {
+  return value ? value.slice(0, 8) : "—";
+}
+
 export default function HandoffsPage() {
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState<HandoffSnapshot[]>([]);
@@ -62,17 +66,16 @@ export default function HandoffsPage() {
               >
                 <div>
                   <span className="text-sm font-medium text-gray-900">
-                    From <span className="font-mono">{h.from_agent_id.slice(0, 8)}</span>
-                    {h.to_agent_id && <> → <span className="font-mono">{h.to_agent_id.slice(0, 8)}</span></>}
+                    Agent <span className="font-mono">{shortId(h.agent_id)}</span>
                   </span>
-                  <span className="ml-3 text-xs text-gray-500">任务 {h.task_id.slice(0, 8)}</span>
+                  <span className="ml-3 text-xs text-gray-500">任务 {shortId(h.task_id)}</span>
                 </div>
                 <span className="text-xs text-gray-400">{formatTime(h.created_at)}</span>
               </button>
               {expanded === h.id && (
                 <div className="space-y-3 border-t border-gray-100 px-5 py-4 text-sm">
-                  {h.context_summary && (
-                    <div><span className="text-xs font-medium text-gray-500">上下文摘要</span><p className="mt-1 text-gray-700">{h.context_summary}</p></div>
+                  {h.summary && (
+                    <div><span className="text-xs font-medium text-gray-500">交接摘要</span><p className="mt-1 text-gray-700">{h.summary}</p></div>
                   )}
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div><span className="text-xs font-medium text-gray-500">已完成</span><p className="mt-1 text-gray-700">{renderList(h.completed_items)}</p></div>
@@ -80,6 +83,7 @@ export default function HandoffsPage() {
                     <div><span className="text-xs font-medium text-gray-500">风险</span><p className="mt-1 text-gray-700">{renderList(h.risks)}</p></div>
                     <div><span className="text-xs font-medium text-gray-500">下一步</span><p className="mt-1 text-gray-700">{renderList(h.next_steps)}</p></div>
                   </div>
+                  <div><span className="text-xs font-medium text-gray-500">关联工件</span><p className="mt-1 text-gray-700">{renderList(h.artifact_refs)}</p></div>
                 </div>
               )}
             </div>

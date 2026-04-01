@@ -9,7 +9,7 @@ import (
 // Event represents a real-time event pushed to SSE clients.
 type Event struct {
 	ID        string          `json:"id"`
-	Topic     string          `json:"topic"`     // workflow, approval, tool_call, audit
+	Topic     string          `json:"topic"`      // workflow, approval, tool_call, audit
 	EventType string          `json:"event_type"` // e.g. workflow.started, approval.decided
 	TargetID  string          `json:"target_id"`
 	ProjectID string          `json:"project_id,omitempty"`

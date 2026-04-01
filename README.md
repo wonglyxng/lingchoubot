@@ -28,11 +28,21 @@ cp .env.example .env
 docker compose up --build
 ```
 
-启动后：
+如果本机 `8080` 或 `3000` 已被占用，可先在 `.env` 中改成其他端口，例如：
+
+```bash
+API_HOST_PORT=18080
+NEXT_PUBLIC_API_URL=http://localhost:18080
+FRONTEND_HOST_PORT=13000
+```
+
+默认配置下启动后：
 - API 服务: http://localhost:8080
 - 前端控制台: http://localhost:3000
 - 健康检查: http://localhost:8080/healthz
 - 就绪检查: http://localhost:8080/readyz
+
+如果使用了上面的覆盖示例，则前端控制台地址变为 `http://localhost:13000`。
 
 ### 本地开发（不用 Docker）
 

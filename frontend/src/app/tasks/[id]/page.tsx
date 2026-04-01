@@ -10,6 +10,10 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { FormModal, FormField, inputClass, textareaClass, selectClass } from "@/components/FormModal";
 import { formatTime, getTaskStatus } from "@/lib/utils";
 
+function shortId(value?: string): string {
+  return value ? value.slice(0, 8) : "—";
+}
+
 const allStatuses = [
   "pending", "assigned", "in_progress", "in_review",
   "revision_required", "completed", "failed", "cancelled", "blocked",
@@ -271,12 +275,11 @@ export default function TaskDetailPage() {
               <li key={h.id} className="py-4 first:pt-0 last:pb-0">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-sm font-medium text-gray-900">
-                    From: <span className="font-mono">{h.from_agent_id.slice(0, 8)}</span>
-                    {h.to_agent_id && <> → <span className="font-mono">{h.to_agent_id.slice(0, 8)}</span></>}
+                    Agent: <span className="font-mono">{shortId(h.agent_id)}</span>
                   </span>
                   <span className="text-xs text-gray-400">{formatTime(h.created_at)}</span>
                 </div>
-                {h.context_summary && <p className="mt-1 text-sm text-gray-600">{h.context_summary}</p>}
+                {h.summary && <p className="mt-1 text-sm text-gray-600">{h.summary}</p>}
               </li>
             ))}
           </ul>
