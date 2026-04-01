@@ -12,6 +12,7 @@ const (
 
 type ReviewReport struct {
 	ID                string        `json:"id"`
+	RunID             *string       `json:"run_id,omitempty"`
 	TaskID            string        `json:"task_id"`
 	ReviewerID        string        `json:"reviewer_id"`
 	ArtifactVersionID *string       `json:"artifact_version_id,omitempty"`

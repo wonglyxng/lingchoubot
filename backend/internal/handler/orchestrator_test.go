@@ -144,6 +144,25 @@ func TestOrchestratorHandler_StartRun_EngineError(t *testing.T) {
 	}
 }
 
+func TestOrchestratorHandler_StartRun_PrecheckFailed(t *testing.T) {
+	engine := &mockWorkflowEngine{
+		runAsyncFn: func(ctx context.Context, projectID string) (*model.WorkflowRun, error) {
+			return nil, fmt.Errorf("%w: missing active agents for roles: reviewer", orchestrator.ErrWorkflowPrecheckFailed)
+		},
+	}
+
+	h := NewOrchestratorHandler(engine)
+	body := `{"project_id":"proj-123"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/v1/orchestrator/runs", strings.NewReader(body))
+
+	h.StartRun(w, r)
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("expected 409, got %d", w.Code)
+	}
+}
+
 func TestOrchestratorHandler_GetRun_Success(t *testing.T) {
 	now := time.Now()
 	engine := &mockWorkflowEngine{

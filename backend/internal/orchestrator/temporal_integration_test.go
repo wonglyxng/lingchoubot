@@ -105,6 +105,15 @@ func TestTemporal_WorkflowHappyPath(t *testing.T) {
 	if reviewCount != 9 {
 		t.Errorf("reviews = %d, want 9", reviewCount)
 	}
+	reviews, total, _ := f.ReviewRepo.List(ctx, repository.ReviewListParams{RunID: run.ID, Limit: 100, Offset: 0})
+	if total != 9 {
+		t.Errorf("reviews for run = %d, want 9", total)
+	}
+	for _, review := range reviews {
+		if review.RunID == nil || *review.RunID != run.ID {
+			t.Errorf("review %q missing run_id %q", review.ID, run.ID)
+		}
+	}
 
 	// Workflow run should be completed
 	finalRun, _ := f.WorkflowSvc.GetRun(ctx, run.ID)
@@ -125,5 +134,81 @@ func TestTemporal_WorkflowHappyPath(t *testing.T) {
 	entries := f.AuditRepo.Entries()
 	if len(entries) < 10 {
 		t.Errorf("audit entries = %d, expected at least 10", len(entries))
+	}
+}
+
+func TestTemporal_WorkflowFailsWithoutReviewer(t *testing.T) {
+	ctx := context.Background()
+	f := testutil.NewFixture()
+
+	if err := f.SeedStandardAgents(ctx); err != nil {
+		t.Fatalf("seed agents: %v", err)
+	}
+	agents, _, err := f.AgentSvc.List(ctx, 100, 0)
+	if err != nil {
+		t.Fatalf("list agents: %v", err)
+	}
+	for _, agent := range agents {
+		if agent.Role != model.AgentRoleReviewer {
+			continue
+		}
+		agent.Status = model.AgentStatusInactive
+		if err := f.AgentSvc.Update(ctx, agent); err != nil {
+			t.Fatalf("disable reviewer: %v", err)
+		}
+	}
+
+	proj := &model.Project{Name: "Temporal缺评审者项目", Description: "验证 Temporal 失败收口"}
+	if err := f.ProjectSvc.Create(ctx, proj); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	run, err := f.WorkflowSvc.CreateRun(ctx, proj.ID)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	activities := &orchestrator.Activities{
+		Registry: f.Registry,
+		Services: &orchestrator.Services{
+			Project:    f.ProjectSvc,
+			Phase:      f.PhaseSvc,
+			Agent:      f.AgentSvc,
+			Task:       f.TaskSvc,
+			Contract:   f.ContractSvc,
+			Assignment: f.AssignmentSvc,
+			Artifact:   f.ArtifactSvc,
+			Handoff:    f.HandoffSvc,
+			Review:     f.ReviewSvc,
+			Approval:   f.ApprovalSvc,
+			Audit:      f.AuditSvc,
+		},
+		Workflow: f.WorkflowSvc,
+		Logger:   f.Logger,
+	}
+
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterActivity(activities.ActivityPM)
+	env.RegisterActivity(activities.ActivityListPhaseTasks)
+	env.RegisterActivity(activities.ActivitySupervisor)
+	env.RegisterActivity(activities.ActivityWorker)
+	env.RegisterActivity(activities.ActivityReviewer)
+	env.RegisterActivity(activities.ActivityCheckRework)
+	env.RegisterActivity(activities.ActivityCompleteRun)
+	env.RegisterActivity(activities.ActivityFailRun)
+	env.ExecuteWorkflow(orchestrator.ProjectWorkflow, orchestrator.ProjectWorkflowInput{RunID: run.ID, ProjectID: proj.ID})
+
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	if err := env.GetWorkflowError(); err == nil {
+		t.Fatal("expected workflow error, got nil")
+	}
+	finalRun, _ := f.WorkflowSvc.GetRun(ctx, run.ID)
+	if finalRun == nil {
+		t.Fatal("run not found")
+	}
+	if finalRun.Status != model.WorkflowRunFailed {
+		t.Errorf("run status = %q, want %q", finalRun.Status, model.WorkflowRunFailed)
 	}
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { Activity, ChevronDown, ChevronRight, Play, RefreshCw, Wifi, WifiOff } from "lucide-react";
 import { api } from "@/lib/api";
@@ -129,6 +130,14 @@ function RunCard({
 
       {expanded && (
         <div className="border-t border-gray-100 px-4 py-3">
+          <div className="mb-3 flex items-center justify-end">
+            <Link
+              href={`/reviews?run_id=${encodeURIComponent(run.id)}`}
+              className="text-xs font-medium text-blue-600 hover:text-blue-700"
+            >
+              查看本次评审
+            </Link>
+          </div>
           {loadingSteps && (
             <p className="text-sm text-gray-500">加载步骤中…</p>
           )}

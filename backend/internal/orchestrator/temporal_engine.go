@@ -15,15 +15,17 @@ import (
 type TemporalEngine struct {
 	client    client.Client
 	taskQueue string
+	services  *Services
 	workflow  *service.WorkflowService
 	logger    *slog.Logger
 }
 
 // NewTemporalEngine creates an engine that dispatches runs to Temporal.
-func NewTemporalEngine(tc client.Client, taskQueue string, workflow *service.WorkflowService, logger *slog.Logger) *TemporalEngine {
+func NewTemporalEngine(tc client.Client, taskQueue string, services *Services, workflow *service.WorkflowService, logger *slog.Logger) *TemporalEngine {
 	return &TemporalEngine{
 		client:    tc,
 		taskQueue: taskQueue,
+		services:  services,
 		workflow:  workflow,
 		logger:    logger,
 	}
@@ -32,6 +34,10 @@ func NewTemporalEngine(tc client.Client, taskQueue string, workflow *service.Wor
 // RunAsync starts a Temporal workflow for the given project.
 // Returns immediately with the created run record; the actual execution happens in a Temporal worker.
 func (te *TemporalEngine) RunAsync(ctx context.Context, projectID string) (*model.WorkflowRun, error) {
+	if _, err := validateWorkflowStartPreconditions(ctx, te.services, projectID); err != nil {
+		return nil, err
+	}
+
 	run, err := te.workflow.CreateRun(ctx, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("create workflow run: %w", err)

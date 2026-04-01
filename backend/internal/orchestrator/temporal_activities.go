@@ -365,7 +365,7 @@ func (a *Activities) ActivityReviewer(ctx context.Context, input TaskChainInput)
 	}
 
 	eng := &Engine{registry: a.Registry, services: a.Services, workflow: a.Workflow, logger: a.Logger}
-	eng.processReviewActions(ctx, task.ID, agent.ID, output.Reviews)
+	eng.processReviewActions(ctx, input.RunID, task.ID, agent.ID, output.Reviews)
 
 	st.complete(ctx, output.Summary)
 	return &StepResult{Summary: output.Summary, StepCount: sortOrder}, nil

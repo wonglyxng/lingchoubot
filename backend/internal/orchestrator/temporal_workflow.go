@@ -45,17 +45,21 @@ func ProjectWorkflow(ctx workflow.Context, input ProjectWorkflowInput) error {
 	}
 	ctx = workflow.WithActivityOptions(ctx, ao)
 
+	failRun := func(msg string, err error) error {
+		_ = workflow.ExecuteActivity(ctx, "ActivityFailRun", FailRunInput{
+			RunID: input.RunID,
+			Error: fmt.Sprintf("%s: %s", msg, err.Error()),
+		}).Get(ctx, nil)
+		return err
+	}
+
 	stepCount := 0
 
 	// Step 1: PM decomposes the project
 	var pmResult PMActivityResult
 	err := workflow.ExecuteActivity(ctx, "ActivityPM", input).Get(ctx, &pmResult)
 	if err != nil {
-		_ = workflow.ExecuteActivity(ctx, "ActivityFailRun", FailRunInput{
-			RunID: input.RunID,
-			Error: fmt.Sprintf("PM activity failed: %s", err.Error()),
-		}).Get(ctx, nil)
-		return err
+		return failRun("PM activity failed", err)
 	}
 	stepCount = pmResult.StepCount
 
@@ -66,7 +70,7 @@ func ProjectWorkflow(ctx workflow.Context, input ProjectWorkflowInput) error {
 			PhaseID: phaseID,
 		}).Get(ctx, &tasksResult)
 		if err != nil {
-			continue
+			return failRun(fmt.Sprintf("list phase tasks failed for phase %s", phaseID), err)
 		}
 
 		for _, taskID := range tasksResult.TaskIDs {
@@ -81,10 +85,11 @@ func ProjectWorkflow(ctx workflow.Context, input ProjectWorkflowInput) error {
 			// Supervisor
 			var supResult StepResult
 			err = workflow.ExecuteActivity(ctx, "ActivitySupervisor", chainInput).Get(ctx, &supResult)
-			if err == nil {
-				stepCount = supResult.StepCount
-				chainInput.SortOffset = stepCount
+			if err != nil {
+				return failRun(fmt.Sprintf("supervisor activity failed for task %s", taskID), err)
 			}
+			stepCount = supResult.StepCount
+			chainInput.SortOffset = stepCount
 
 			// Worker → Reviewer with rework loop
 			const maxReworkAttempts = 3
@@ -93,18 +98,20 @@ func ProjectWorkflow(ctx workflow.Context, input ProjectWorkflowInput) error {
 				var workerResult StepResult
 				chainInput.SortOffset = stepCount
 				err = workflow.ExecuteActivity(ctx, "ActivityWorker", chainInput).Get(ctx, &workerResult)
-				if err == nil {
-					stepCount = workerResult.StepCount
-					chainInput.SortOffset = stepCount
+				if err != nil {
+					return failRun(fmt.Sprintf("worker activity failed for task %s", taskID), err)
 				}
+				stepCount = workerResult.StepCount
+				chainInput.SortOffset = stepCount
 
 				// Reviewer
 				var reviewResult StepResult
 				err = workflow.ExecuteActivity(ctx, "ActivityReviewer", chainInput).Get(ctx, &reviewResult)
-				if err == nil {
-					stepCount = reviewResult.StepCount
-					chainInput.SortOffset = stepCount
+				if err != nil {
+					return failRun(fmt.Sprintf("reviewer activity failed for task %s", taskID), err)
 				}
+				stepCount = reviewResult.StepCount
+				chainInput.SortOffset = stepCount
 
 				// Check if rework needed
 				var needsRework bool
@@ -112,7 +119,10 @@ func ProjectWorkflow(ctx workflow.Context, input ProjectWorkflowInput) error {
 					TaskID:  taskID,
 					Attempt: attempt + 1,
 				}).Get(ctx, &needsRework)
-				if checkErr != nil || !needsRework {
+				if checkErr != nil {
+					return failRun(fmt.Sprintf("rework check failed for task %s", taskID), checkErr)
+				}
+				if !needsRework {
 					break
 				}
 			}
@@ -120,10 +130,12 @@ func ProjectWorkflow(ctx workflow.Context, input ProjectWorkflowInput) error {
 	}
 
 	// Step 3: Complete the run
-	_ = workflow.ExecuteActivity(ctx, "ActivityCompleteRun", CompleteRunInput{
+	if err := workflow.ExecuteActivity(ctx, "ActivityCompleteRun", CompleteRunInput{
 		RunID:     input.RunID,
 		ProjectID: input.ProjectID,
-	}).Get(ctx, nil)
+	}).Get(ctx, nil); err != nil {
+		return failRun("complete run activity failed", err)
+	}
 
 	return nil
 }

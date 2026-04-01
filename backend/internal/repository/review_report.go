@@ -18,24 +18,24 @@ func NewReviewReportRepo(db *sql.DB) *ReviewReportRepo {
 
 func (r *ReviewReportRepo) Create(ctx context.Context, rr *model.ReviewReport) error {
 	const q = `
-		INSERT INTO review_report (task_id, reviewer_id, artifact_version_id, verdict,
+		INSERT INTO review_report (run_id, task_id, reviewer_id, artifact_version_id, verdict,
 		                            summary, findings, recommendations, metadata)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id, created_at`
 	return r.db.QueryRowContext(ctx, q,
-		rr.TaskID, rr.ReviewerID, rr.ArtifactVersionID, rr.Verdict,
+		rr.RunID, rr.TaskID, rr.ReviewerID, rr.ArtifactVersionID, rr.Verdict,
 		rr.Summary, rr.Findings, rr.Recommendations, rr.Metadata,
 	).Scan(&rr.ID, &rr.CreatedAt)
 }
 
 func (r *ReviewReportRepo) GetByID(ctx context.Context, id string) (*model.ReviewReport, error) {
 	const q = `
-		SELECT id, task_id, reviewer_id, artifact_version_id, verdict,
+		SELECT id, run_id, task_id, reviewer_id, artifact_version_id, verdict,
 		       summary, findings, recommendations, metadata, created_at
 		FROM review_report WHERE id = $1`
 	rr := &model.ReviewReport{}
 	err := r.db.QueryRowContext(ctx, q, id).Scan(
-		&rr.ID, &rr.TaskID, &rr.ReviewerID, &rr.ArtifactVersionID, &rr.Verdict,
+		&rr.ID, &rr.RunID, &rr.TaskID, &rr.ReviewerID, &rr.ArtifactVersionID, &rr.Verdict,
 		&rr.Summary, &rr.Findings, &rr.Recommendations, &rr.Metadata, &rr.CreatedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -48,6 +48,7 @@ func (r *ReviewReportRepo) GetByID(ctx context.Context, id string) (*model.Revie
 }
 
 type ReviewListParams struct {
+	RunID      string
 	TaskID     string
 	ReviewerID string
 	Verdict    string
@@ -60,6 +61,11 @@ func (r *ReviewReportRepo) List(ctx context.Context, p ReviewListParams) ([]*mod
 	args := []interface{}{}
 	idx := 1
 
+	if p.RunID != "" {
+		where += fmt.Sprintf(" AND run_id = $%d", idx)
+		args = append(args, p.RunID)
+		idx++
+	}
 	if p.TaskID != "" {
 		where += fmt.Sprintf(" AND task_id = $%d", idx)
 		args = append(args, p.TaskID)
@@ -82,7 +88,7 @@ func (r *ReviewReportRepo) List(ctx context.Context, p ReviewListParams) ([]*mod
 	}
 
 	q := fmt.Sprintf(`
-		SELECT id, task_id, reviewer_id, artifact_version_id, verdict,
+		SELECT id, run_id, task_id, reviewer_id, artifact_version_id, verdict,
 		       summary, findings, recommendations, metadata, created_at
 		FROM review_report %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`,
 		where, idx, idx+1)
@@ -98,7 +104,7 @@ func (r *ReviewReportRepo) List(ctx context.Context, p ReviewListParams) ([]*mod
 	for rows.Next() {
 		rr := &model.ReviewReport{}
 		if err := rows.Scan(
-			&rr.ID, &rr.TaskID, &rr.ReviewerID, &rr.ArtifactVersionID, &rr.Verdict,
+			&rr.ID, &rr.RunID, &rr.TaskID, &rr.ReviewerID, &rr.ArtifactVersionID, &rr.Verdict,
 			&rr.Summary, &rr.Findings, &rr.Recommendations, &rr.Metadata, &rr.CreatedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("reviewReport.List scan: %w", err)

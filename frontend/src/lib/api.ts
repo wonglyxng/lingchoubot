@@ -29,6 +29,11 @@ async function get<T>(path: string): Promise<T> {
   return body.data;
 }
 
+async function getList<T>(path: string): Promise<T[]> {
+  const data = await get<ListResponse<T>>(path);
+  return Array.isArray(data.items) ? data.items : [];
+}
+
 async function post<T>(path: string, data: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: "POST",
@@ -89,7 +94,7 @@ export const api = {
 
   phases: {
     listByProject: (projectId: string) =>
-      get<Phase[]>(`/api/v1/projects/${projectId}/phases`),
+      getList<Phase>(`/api/v1/projects/${projectId}/phases`),
     get: (id: string) => get<Phase>(`/api/v1/phases/${id}`),
     create: (data: Partial<Phase>) => post<Phase>("/api/v1/phases", data),
     update: (id: string, data: Partial<Phase>) => put<Phase>(`/api/v1/phases/${id}`, data),
@@ -101,7 +106,7 @@ export const api = {
       get<ListResponse<Agent>>(`/api/v1/agents?limit=${limit}&offset=${offset}`),
     get: (id: string) => get<Agent>(`/api/v1/agents/${id}`),
     orgTree: (rootId?: string) =>
-      get<Agent[]>(`/api/v1/agents/org-tree${rootId ? `?root_id=${rootId}` : ""}`),
+      getList<Agent>(`/api/v1/agents/org-tree${rootId ? `?root_id=${rootId}` : ""}`),
     create: (data: Partial<Agent>) => post<Agent>("/api/v1/agents", data),
     update: (id: string, data: Partial<Agent>) => put<Agent>(`/api/v1/agents/${id}`, data),
     delete: (id: string) => del<null>(`/api/v1/agents/${id}`),
@@ -126,7 +131,7 @@ export const api = {
 
   taskContracts: {
     list: (taskId: string) =>
-      get<TaskContract[]>(`/api/v1/tasks/${taskId}/contracts`),
+      getList<TaskContract>(`/api/v1/tasks/${taskId}/contracts`),
     latest: (taskId: string) =>
       get<TaskContract>(`/api/v1/tasks/${taskId}/contracts/latest`),
     get: (id: string) => get<TaskContract>(`/api/v1/task-contracts/${id}`),
@@ -161,14 +166,15 @@ export const api = {
     get: (id: string) => get<Artifact>(`/api/v1/artifacts/${id}`),
     create: (data: Partial<Artifact>) => post<Artifact>("/api/v1/artifacts", data),
     versions: (artifactId: string) =>
-      get<ArtifactVersion[]>(`/api/v1/artifacts/${artifactId}/versions`),
+      getList<ArtifactVersion>(`/api/v1/artifacts/${artifactId}/versions`),
     addVersion: (artifactId: string, data: Partial<ArtifactVersion>) =>
       post<ArtifactVersion>(`/api/v1/artifacts/${artifactId}/versions`, data),
   },
 
   reviews: {
-    list: (params?: { task_id?: string; reviewer_id?: string; limit?: number; offset?: number }) => {
+    list: (params?: { run_id?: string; task_id?: string; reviewer_id?: string; limit?: number; offset?: number }) => {
       const q = new URLSearchParams();
+      if (params?.run_id) q.set("run_id", params.run_id);
       if (params?.task_id) q.set("task_id", params.task_id);
       if (params?.reviewer_id) q.set("reviewer_id", params.reviewer_id);
       q.set("limit", String(params?.limit || 50));
@@ -201,7 +207,7 @@ export const api = {
       return get<ListResponse<ToolCall>>(`/api/v1/tool-calls?${q.toString()}`);
     },
     get: (id: string) => get<ToolCall>(`/api/v1/tool-calls/${id}`),
-    tools: () => get<unknown[]>("/api/v1/tools"),
+    tools: () => getList<unknown>("/api/v1/tools"),
   },
 
   approvals: {

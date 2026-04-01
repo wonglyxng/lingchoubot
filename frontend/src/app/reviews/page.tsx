@@ -21,19 +21,27 @@ function verdictBadge(verdict: string) {
 }
 
 export default function ReviewsPage() {
+  const [runId, setRunId] = useState("");
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState<ReviewReport[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    setRunId(new URLSearchParams(window.location.search).get("run_id") ?? "");
+  }, []);
 
   const load = useCallback(() => {
     setLoading(true);
     setError(null);
     api.reviews
-      .list()
+      .list(runId ? { run_id: runId } : undefined)
       .then((res) => setItems(res.items ?? []))
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [runId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -45,7 +53,9 @@ export default function ReviewsPage() {
         </div>
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">评审报告</h1>
-          <p className="mt-1 text-sm text-gray-500">独立评审记录</p>
+          <p className="mt-1 text-sm text-gray-500">
+            {runId ? `运行 #${runId.slice(0, 8)} 的独立评审记录` : "全局独立评审记录"}
+          </p>
         </div>
       </div>
 
@@ -63,6 +73,7 @@ export default function ReviewsPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-200 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                <th className="px-4 py-3">运行 ID</th>
                 <th className="px-4 py-3">摘要</th>
                 <th className="px-4 py-3">任务 ID</th>
                 <th className="px-4 py-3">评审者</th>
@@ -75,6 +86,7 @@ export default function ReviewsPage() {
                 const vb = verdictBadge(r.verdict);
                 return (
                   <tr key={r.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 font-mono text-xs text-gray-600">{r.run_id ? r.run_id.slice(0, 8) : "—"}</td>
                     <td className="px-4 py-3 font-medium text-gray-900">{r.summary || "—"}</td>
                     <td className="px-4 py-3 font-mono text-xs text-gray-600">{r.task_id.slice(0, 8)}</td>
                     <td className="px-4 py-3 font-mono text-xs text-gray-600">{r.reviewer_id.slice(0, 8)}</td>

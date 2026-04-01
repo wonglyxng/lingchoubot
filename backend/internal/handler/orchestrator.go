@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -42,6 +43,10 @@ func (h *OrchestratorHandler) StartRun(w http.ResponseWriter, r *http.Request) {
 
 	run, err := h.engine.RunAsync(r.Context(), body.ProjectID)
 	if err != nil {
+		if errors.Is(err, orchestrator.ErrWorkflowPrecheckFailed) {
+			middleware.ErrorJSON(w, http.StatusConflict, "PRECHECK_FAILED", err.Error())
+			return
+		}
 		middleware.ErrorJSON(w, http.StatusInternalServerError, "WORKFLOW_ERROR", err.Error())
 		return
 	}

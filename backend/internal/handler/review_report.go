@@ -54,6 +54,7 @@ func (h *ReviewReportHandler) Get(w http.ResponseWriter, r *http.Request) {
 func (h *ReviewReportHandler) List(w http.ResponseWriter, r *http.Request) {
 	limit, offset := parsePagination(r)
 	p := repository.ReviewListParams{
+		RunID:      r.URL.Query().Get("run_id"),
 		TaskID:     r.URL.Query().Get("task_id"),
 		ReviewerID: r.URL.Query().Get("reviewer_id"),
 		Verdict:    r.URL.Query().Get("verdict"),

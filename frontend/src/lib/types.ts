@@ -114,6 +114,7 @@ export interface AuditLog {
 
 export interface ReviewReport {
   id: string;
+  run_id?: string;
   task_id: string;
   reviewer_id: string;
   artifact_version_id?: string;
@@ -157,13 +158,13 @@ export interface TaskAssignment {
 export interface HandoffSnapshot {
   id: string;
   task_id: string;
-  from_agent_id: string;
-  to_agent_id?: string;
+  agent_id: string;
+  summary: string;
   completed_items: unknown;
   pending_items: unknown;
   risks: unknown;
   next_steps: unknown;
-  context_summary: string;
+  artifact_refs: unknown;
   metadata: Record<string, unknown>;
   created_at: string;
 }

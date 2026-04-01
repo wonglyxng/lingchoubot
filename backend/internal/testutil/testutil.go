@@ -709,7 +709,18 @@ func (r *FakeReviewReportRepo) List(_ context.Context, p repository.ReviewListPa
 	defer r.mu.Unlock()
 	var result []*model.ReviewReport
 	for _, rr := range r.reports {
+		if p.RunID != "" {
+			if rr.RunID == nil || *rr.RunID != p.RunID {
+				continue
+			}
+		}
 		if p.TaskID != "" && rr.TaskID != p.TaskID {
+			continue
+		}
+		if p.ReviewerID != "" && rr.ReviewerID != p.ReviewerID {
+			continue
+		}
+		if p.Verdict != "" && string(rr.Verdict) != p.Verdict {
 			continue
 		}
 		cp := *rr

@@ -2,11 +2,13 @@ package orchestrator_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/lingchou/lingchoubot/backend/internal/model"
+	"github.com/lingchou/lingchoubot/backend/internal/orchestrator"
 	"github.com/lingchou/lingchoubot/backend/internal/repository"
 	"github.com/lingchou/lingchoubot/backend/internal/runtime"
 	"github.com/lingchou/lingchoubot/backend/internal/testutil"
@@ -76,6 +78,15 @@ func TestIntegration_HappyPath(t *testing.T) {
 	if reviewCount != 9 {
 		t.Errorf("reviews = %d, want 9", reviewCount)
 	}
+	reviews, total, _ := f.ReviewRepo.List(ctx, repository.ReviewListParams{RunID: run.ID, Limit: 100, Offset: 0})
+	if total != 9 {
+		t.Errorf("reviews for run = %d, want 9", total)
+	}
+	for _, review := range reviews {
+		if review.RunID == nil || *review.RunID != run.ID {
+			t.Errorf("review %q missing run_id %q", review.ID, run.ID)
+		}
+	}
 
 	// ---- Verify Workflow Steps ----
 	// 1 PM step + 9*(supervisor+worker+reviewer) = 1 + 27 = 28
@@ -111,6 +122,45 @@ func TestIntegration_HappyPath(t *testing.T) {
 	}
 	if !hasCompleted {
 		t.Error("missing workflow.completed audit event")
+	}
+}
+
+func TestIntegration_MissingReviewerPrecheckFails(t *testing.T) {
+	ctx := context.Background()
+	f := testutil.NewFixture()
+
+	if err := f.SeedStandardAgents(ctx); err != nil {
+		t.Fatalf("seed agents: %v", err)
+	}
+	agents, _, err := f.AgentSvc.List(ctx, 100, 0)
+	if err != nil {
+		t.Fatalf("list agents: %v", err)
+	}
+	for _, agent := range agents {
+		if agent.Role != model.AgentRoleReviewer {
+			continue
+		}
+		agent.Status = model.AgentStatusInactive
+		if err := f.AgentSvc.Update(ctx, agent); err != nil {
+			t.Fatalf("disable reviewer: %v", err)
+		}
+	}
+
+	proj := &model.Project{Name: "缺评审者项目", Description: "验证工作流启动前校验"}
+	if err := f.ProjectSvc.Create(ctx, proj); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	_, err = f.Engine.Run(ctx, proj.ID)
+	if !errors.Is(err, orchestrator.ErrWorkflowPrecheckFailed) {
+		t.Fatalf("expected ErrWorkflowPrecheckFailed, got %v", err)
+	}
+	runs, total, err := f.WorkflowSvc.ListRuns(ctx, repository.WorkflowRunListParams{ProjectID: proj.ID, Limit: 10, Offset: 0})
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if total != 0 || len(runs) != 0 {
+		t.Fatalf("expected no workflow runs created, got total=%d len=%d", total, len(runs))
 	}
 }
 
@@ -270,16 +320,30 @@ func TestIntegration_MaxReworkExceeded(t *testing.T) {
 		t.Fatalf("Engine.Run: %v", err)
 	}
 
-	// Run should still complete (errors in individual task chains are logged, not propagated to Run)
-	if run.Status != model.WorkflowRunCompleted {
-		t.Errorf("run status = %q, want %q", run.Status, model.WorkflowRunCompleted)
+	// The first task to exceed max rework attempts should fail the whole run.
+	if run.Status != model.WorkflowRunFailed {
+		t.Errorf("run status = %q, want %q", run.Status, model.WorkflowRunFailed)
 	}
 
-	// Each task should have (maxReworkAttempts+1)=4 reviews (all needs_revision)
+	// Only the first failing task should consume the full rework budget before the run aborts.
 	reviewCount := f.ReviewRepo.TotalCount()
-	// 9 tasks * 4 review rounds = 36
-	if reviewCount != 36 {
-		t.Errorf("reviews = %d, want 36", reviewCount)
+	if reviewCount != 4 {
+		t.Errorf("reviews = %d, want 4", reviewCount)
+	}
+	hasFailed, hasCompleted := false, false
+	for _, entry := range f.AuditRepo.Entries() {
+		if entry.EventType == "workflow.failed" {
+			hasFailed = true
+		}
+		if entry.EventType == "workflow.completed" {
+			hasCompleted = true
+		}
+	}
+	if !hasFailed {
+		t.Error("missing workflow.failed audit event")
+	}
+	if hasCompleted {
+		t.Error("unexpected workflow.completed audit event")
 	}
 }
 

@@ -80,12 +80,9 @@ func (e *Engine) CancelRun(ctx context.Context, id string) error {
 // Run executes the full workflow for a project: PM → Supervisor → Worker → Reviewer.
 // This is a synchronous call — use RunAsync for non-blocking execution.
 func (e *Engine) Run(ctx context.Context, projectID string) (*model.WorkflowRun, error) {
-	proj, err := e.services.Project.GetByID(ctx, projectID)
+	proj, err := validateWorkflowStartPreconditions(ctx, e.services, projectID)
 	if err != nil {
-		return nil, fmt.Errorf("get project: %w", err)
-	}
-	if proj == nil {
-		return nil, fmt.Errorf("project %s not found", projectID)
+		return nil, err
 	}
 
 	run, err := e.workflow.CreateRun(ctx, proj.ID)
@@ -111,8 +108,8 @@ func (e *Engine) Run(ctx context.Context, projectID string) (*model.WorkflowRun,
 
 	for _, phase := range phases {
 		if err := e.runPhase(ctx, rc, proj, phase); err != nil {
-			e.logger.Error("phase failed", "phase", phase.Name, "error", err)
-			continue
+			e.failRun(ctx, rc, err)
+			return e.workflow.GetRun(ctx, run.ID)
 		}
 	}
 
@@ -132,12 +129,9 @@ func (e *Engine) Run(ctx context.Context, projectID string) (*model.WorkflowRun,
 // The caller can poll GetRun to check progress. Uses context.Background() to
 // decouple the workflow lifetime from the HTTP request.
 func (e *Engine) RunAsync(ctx context.Context, projectID string) (*model.WorkflowRun, error) {
-	proj, err := e.services.Project.GetByID(ctx, projectID)
+	proj, err := validateWorkflowStartPreconditions(ctx, e.services, projectID)
 	if err != nil {
-		return nil, fmt.Errorf("get project: %w", err)
-	}
-	if proj == nil {
-		return nil, fmt.Errorf("project %s not found", projectID)
+		return nil, err
 	}
 
 	run, err := e.workflow.CreateRun(ctx, proj.ID)
@@ -166,8 +160,8 @@ func (e *Engine) RunAsync(ctx context.Context, projectID string) (*model.Workflo
 
 		for _, phase := range phases {
 			if err := e.runPhase(bgCtx, rc, proj, phase); err != nil {
-				e.logger.Error("phase failed", "phase", phase.Name, "error", err)
-				continue
+				e.failRun(bgCtx, rc, err)
+				return
 			}
 		}
 
@@ -261,6 +255,7 @@ func (e *Engine) runPhase(ctx context.Context, rc *runCtx, proj *model.Project, 
 	for _, task := range tasks {
 		if err := e.runTaskChain(ctx, rc, proj, phase, task); err != nil {
 			e.logger.Error("task chain failed", "task", task.Title, "error", err)
+			return err
 		}
 	}
 	return nil
@@ -497,7 +492,7 @@ func (e *Engine) runReviewer(ctx context.Context, rc *runCtx, proj *model.Projec
 		return fmt.Errorf("reviewer failed: %s", output.Error)
 	}
 
-	e.processReviewActions(ctx, task.ID, agent.ID, output.Reviews)
+	e.processReviewActions(ctx, rc.run.ID, task.ID, agent.ID, output.Reviews)
 
 	_ = e.workflow.CompleteStep(ctx, step, output.Summary)
 	return nil
@@ -642,12 +637,14 @@ func (e *Engine) processHandoffActions(ctx context.Context, taskID, agentID stri
 	}
 }
 
-func (e *Engine) processReviewActions(ctx context.Context, taskID, reviewerID string, actions []runtime.ReviewAction) {
+func (e *Engine) processReviewActions(ctx context.Context, runID, taskID, reviewerID string, actions []runtime.ReviewAction) {
 	for _, a := range actions {
 		findings, _ := json.Marshal(a.Findings)
 		recommendations, _ := json.Marshal(a.Recommendations)
 
+		runIDCopy := runID
 		report := &model.ReviewReport{
+			RunID:           &runIDCopy,
 			TaskID:          taskID,
 			ReviewerID:      reviewerID,
 			Verdict:         model.ReviewVerdict(a.Verdict),
