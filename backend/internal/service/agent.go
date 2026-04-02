@@ -64,7 +64,7 @@ func normalizeAgentForWrite(a *model.Agent) error {
 		a.Specialization = model.AgentSpecGeneral
 	}
 	if a.RoleCode == "" && a.Role != "" {
-		a.RoleCode = defaultRoleCode(a.Role)
+		a.RoleCode = defaultRoleCode(a.Role, a.Specialization)
 	}
 	if len(a.ManagedRoles) == 0 {
 		a.ManagedRoles = model.JSON("[]")
@@ -102,6 +102,9 @@ func (s *AgentService) Update(ctx context.Context, a *model.Agent) error {
 	}
 	if old == nil {
 		return fmt.Errorf("agent not found")
+	}
+	if a.RoleCode == "" {
+		a.RoleCode = old.RoleCode
 	}
 	if err := normalizeAgentForWrite(a); err != nil {
 		return err
@@ -151,14 +154,24 @@ func (s *AgentService) FindByRoleCode(ctx context.Context, roleCode model.RoleCo
 }
 
 // defaultRoleCode returns a sensible role_code when none is provided.
-func defaultRoleCode(role model.AgentRole) model.RoleCode {
+func defaultRoleCode(role model.AgentRole, spec model.AgentSpecialization) model.RoleCode {
 	switch role {
 	case model.AgentRolePM:
 		return model.RoleCodePMSupervisor
 	case model.AgentRoleSupervisor:
+		if spec == model.AgentSpecQA {
+			return model.RoleCodeQASupervisor
+		}
 		return model.RoleCodeDevelopmentSupervisor
 	case model.AgentRoleWorker:
-		return model.RoleCodeBackendDevWorker
+		switch spec {
+		case model.AgentSpecFrontend:
+			return model.RoleCodeFrontendDevWorker
+		case model.AgentSpecQA:
+			return model.RoleCodeQAWorker
+		default:
+			return model.RoleCodeBackendDevWorker
+		}
 	case model.AgentRoleReviewer:
 		return model.RoleCodeReviewerWorker
 	default:

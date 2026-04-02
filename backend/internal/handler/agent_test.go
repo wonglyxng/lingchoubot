@@ -106,3 +106,58 @@ func TestAgentHandlerUpdateRoleCodeConflict(t *testing.T) {
 		t.Fatalf("error code = %+v, want ROLE_CODE_CONFLICT", resp.Error)
 	}
 }
+
+func TestAgentHandlerUpdatePreservesExistingRoleCodeWhenOmitted(t *testing.T) {
+	repo := testutil.NewFakeAgentRepo()
+	auditRepo := testutil.NewFakeAuditRepo()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	auditSvc := service.NewAuditService(auditRepo, logger)
+	agentSvc := service.NewAgentService(repo, auditSvc)
+	h := NewAgentHandler(agentSvc)
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	ctx := context.Background()
+	if err := agentSvc.Create(ctx, &model.Agent{
+		Name:           "Backend Worker",
+		Role:           model.AgentRoleWorker,
+		RoleCode:       model.RoleCodeBackendDevWorker,
+		Status:         model.AgentStatusActive,
+		AgentType:      model.AgentTypeMock,
+		Specialization: model.AgentSpecBackend,
+	}); err != nil {
+		t.Fatalf("seed backend worker: %v", err)
+	}
+	frontend := &model.Agent{
+		Name:           "Frontend Worker",
+		Role:           model.AgentRoleWorker,
+		RoleCode:       model.RoleCodeFrontendDevWorker,
+		Status:         model.AgentStatusActive,
+		AgentType:      model.AgentTypeLLM,
+		Specialization: model.AgentSpecFrontend,
+		Metadata:       model.JSON(`{"llm":{"provider":"deepseek","model":"deepseek-chat"}}`),
+	}
+	if err := agentSvc.Create(ctx, frontend); err != nil {
+		t.Fatalf("seed frontend worker: %v", err)
+	}
+
+	updateBody := []byte(`{"name":"Frontend Worker","role":"worker","agent_type":"llm","specialization":"frontend","description":"updated","metadata":{"llm":{"provider":"deepseek","model":"deepseek-chat"}}}`)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+frontend.ID, bytes.NewReader(updateBody))
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("update status = %d, want %d: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	updated, err := agentSvc.GetByID(ctx, frontend.ID)
+	if err != nil {
+		t.Fatalf("GetByID error: %v", err)
+	}
+	if updated.RoleCode != model.RoleCodeFrontendDevWorker {
+		t.Fatalf("role_code = %s, want %s", updated.RoleCode, model.RoleCodeFrontendDevWorker)
+	}
+	if updated.Description != "updated" {
+		t.Fatalf("description = %q, want %q", updated.Description, "updated")
+	}
+}

@@ -23,6 +23,7 @@ import { FormModal, FormField, inputClass, textareaClass, selectClass } from "@/
 type AgentFormState = {
   name: string;
   role: string;
+  role_code: string;
   description: string;
   agent_type: string;
   specialization: string;
@@ -32,10 +33,33 @@ type AgentFormState = {
   metadata: Record<string, unknown>;
 };
 
+function deriveRoleCode(role: string, specialization: string): string {
+  switch (role) {
+    case "pm":
+      return "PM_SUPERVISOR";
+    case "supervisor":
+      return specialization === "qa" ? "QA_SUPERVISOR" : "DEVELOPMENT_SUPERVISOR";
+    case "worker":
+      switch (specialization) {
+        case "frontend":
+          return "FRONTEND_DEV_WORKER";
+        case "qa":
+          return "QA_WORKER";
+        default:
+          return "BACKEND_DEV_WORKER";
+      }
+    case "reviewer":
+      return "REVIEWER_WORKER";
+    default:
+      return "";
+  }
+}
+
 function createEmptyAgentForm(): AgentFormState {
   return {
     name: "",
     role: "worker",
+    role_code: deriveRoleCode("worker", "general"),
     description: "",
     agent_type: "llm",
     specialization: "general",
@@ -50,6 +74,7 @@ function buildAgentPayload(form: AgentFormState) {
   return {
     name: form.name.trim(),
     role: form.role,
+    role_code: form.role_code || deriveRoleCode(form.role, form.specialization),
     description: form.description.trim(),
     agent_type: form.agent_type,
     specialization: form.specialization,
@@ -192,6 +217,7 @@ export default function AgentsPage() {
     setEditForm({
       name: a.name,
       role: a.role,
+      role_code: a.role_code || deriveRoleCode(a.role, a.specialization),
       description: a.description,
       agent_type: a.agent_type || "llm",
       specialization: a.specialization,
@@ -271,7 +297,10 @@ export default function AgentsPage() {
         </FormField>
         <div className="grid grid-cols-2 gap-4">
           <FormField label="角色" required>
-            <select className={selectClass} value={form.role} onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))}>
+            <select className={selectClass} value={form.role} onChange={(e) => setForm((f) => {
+              const role = e.target.value;
+              return { ...f, role, role_code: deriveRoleCode(role, f.specialization) };
+            })}>
               <option value="pm">项目经理</option>
               <option value="supervisor">主管</option>
               <option value="worker">执行者</option>
@@ -332,7 +361,10 @@ export default function AgentsPage() {
           </>
         )}
         <FormField label="专长">
-          <select className={selectClass} value={form.specialization} onChange={(e) => setForm((f) => ({ ...f, specialization: e.target.value }))}>
+          <select className={selectClass} value={form.specialization} onChange={(e) => setForm((f) => {
+            const specialization = e.target.value;
+            return { ...f, specialization, role_code: deriveRoleCode(f.role, specialization) };
+          })}>
             <option value="general">通用</option>
             <option value="backend">后端</option>
             <option value="frontend">前端</option>
@@ -374,7 +406,10 @@ export default function AgentsPage() {
         </FormField>
         <div className="grid grid-cols-2 gap-4">
           <FormField label="角色" required>
-            <select className={selectClass} value={editForm.role} onChange={(e) => setEditForm((f) => ({ ...f, role: e.target.value }))}>
+            <select className={selectClass} value={editForm.role} onChange={(e) => setEditForm((f) => {
+              const role = e.target.value;
+              return { ...f, role, role_code: deriveRoleCode(role, f.specialization) };
+            })}>
               <option value="pm">项目经理</option><option value="supervisor">主管</option><option value="worker">执行者</option><option value="reviewer">评审者</option>
             </select>
           </FormField>
@@ -431,7 +466,10 @@ export default function AgentsPage() {
           </>
         )}
         <FormField label="专长">
-          <select className={selectClass} value={editForm.specialization} onChange={(e) => setEditForm((f) => ({ ...f, specialization: e.target.value }))}>
+          <select className={selectClass} value={editForm.specialization} onChange={(e) => setEditForm((f) => {
+            const specialization = e.target.value;
+            return { ...f, specialization, role_code: deriveRoleCode(f.role, specialization) };
+          })}>
             <option value="general">通用</option><option value="backend">后端</option><option value="frontend">前端</option>
             <option value="qa">测试</option><option value="release">发布</option><option value="devops">运维</option><option value="design">设计</option>
           </select>
