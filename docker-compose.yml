@@ -108,6 +108,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      minio:
+        condition: service_started
 
   # 独立 Temporal Worker 进程（生产模式：API 设 TEMPORAL_WORKER_EMBEDDED=false）
   worker:
@@ -167,6 +169,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      minio:
+        condition: service_started
       temporal:
         condition: service_started
     profiles:
