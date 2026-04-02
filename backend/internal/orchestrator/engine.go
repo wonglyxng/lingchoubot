@@ -616,6 +616,12 @@ func (e *Engine) runReviewer(ctx context.Context, rc *runCtx, proj *model.Projec
 		return err
 	}
 
+	artifactCtxs, err := e.loadTaskArtifactContexts(ctx, task.ID)
+	if err != nil {
+		_ = e.workflow.FailStep(ctx, step, err.Error())
+		return err
+	}
+
 	input := &runtime.AgentTaskInput{
 		RunID:       rc.run.ID,
 		AgentID:     agent.ID,
@@ -623,7 +629,9 @@ func (e *Engine) runReviewer(ctx context.Context, rc *runCtx, proj *model.Projec
 		AgentLLM:    agentLLM,
 		Instruction: fmt.Sprintf("评审任务「%s」的交付物", task.Title),
 		Project:     &runtime.ProjectCtx{ID: proj.ID, Name: proj.Name, Description: proj.Description},
+		Phase:       &runtime.PhaseCtx{ID: phase.ID, ProjectID: proj.ID, Name: phase.Name, Description: phase.Description, SortOrder: phase.SortOrder},
 		Task:        &runtime.TaskCtx{ID: task.ID, ProjectID: proj.ID, PhaseID: phase.ID, Title: task.Title, Description: task.Description, Priority: task.Priority},
+		Artifacts:   artifactCtxs,
 	}
 
 	output, err := runner.Execute(input)
@@ -636,7 +644,7 @@ func (e *Engine) runReviewer(ctx context.Context, rc *runCtx, proj *model.Projec
 		return fmt.Errorf("reviewer failed: %s", output.Error)
 	}
 
-	e.processReviewActions(ctx, rc.run.ID, task.ID, agent.ID, output.Reviews)
+	e.processReviewActions(ctx, rc.run.ID, task.ID, agent.ID, artifactCtxs, output.Reviews)
 
 	_ = e.workflow.CompleteStep(ctx, step, output.Summary)
 	return nil
@@ -748,10 +756,11 @@ func (e *Engine) processArtifactActions(ctx context.Context, projectID, taskID, 
 			URI:           a.URI,
 			ContentType:   a.ContentType,
 			SizeBytes:     a.SizeBytes,
-			Checksum:      fmt.Sprintf("%x", a.Content),
 			ChangeSummary: "初始版本（Mock 生成）",
 			CreatedBy:     &agentID,
 			Metadata:      model.JSON(metaBytes),
+			Content:       a.Content,
+			SourceName:    a.Name,
 		}
 		if err := e.services.Artifact.AddVersion(ctx, version); err != nil {
 			e.logger.Error("add artifact version failed", "artifact", artifact.ID, "error", err)
@@ -781,25 +790,100 @@ func (e *Engine) processHandoffActions(ctx context.Context, taskID, agentID stri
 	}
 }
 
-func (e *Engine) processReviewActions(ctx context.Context, runID, taskID, reviewerID string, actions []runtime.ReviewAction) {
+func (e *Engine) processReviewActions(ctx context.Context, runID, taskID, reviewerID string, artifactCtxs []runtime.ArtifactCtx, actions []runtime.ReviewAction) {
 	for _, a := range actions {
 		findings, _ := json.Marshal(a.Findings)
 		recommendations, _ := json.Marshal(a.Recommendations)
+		metadata, artifactVersionID := buildReviewMetadata(artifactCtxs)
+		metadataBytes, _ := json.Marshal(metadata)
 
 		runIDCopy := runID
 		report := &model.ReviewReport{
-			RunID:           &runIDCopy,
-			TaskID:          taskID,
-			ReviewerID:      reviewerID,
-			Verdict:         model.ReviewVerdict(a.Verdict),
-			Summary:         a.Summary,
-			Findings:        model.JSON(findings),
-			Recommendations: model.JSON(recommendations),
+			RunID:             &runIDCopy,
+			TaskID:            taskID,
+			ReviewerID:        reviewerID,
+			ArtifactVersionID: artifactVersionID,
+			Verdict:           model.ReviewVerdict(a.Verdict),
+			Summary:           a.Summary,
+			Findings:          model.JSON(findings),
+			Recommendations:   model.JSON(recommendations),
+			Metadata:          model.JSON(metadataBytes),
 		}
 		if err := e.services.Review.Create(ctx, report); err != nil {
 			e.logger.Error("create review failed", "task", taskID, "error", err)
 		}
 	}
+}
+
+func (e *Engine) loadTaskArtifactContexts(ctx context.Context, taskID string) ([]runtime.ArtifactCtx, error) {
+	artifacts, _, err := e.services.Artifact.List(ctx, repository.ArtifactListParams{TaskID: taskID, Limit: 100, Offset: 0})
+	if err != nil {
+		return nil, fmt.Errorf("list task artifacts: %w", err)
+	}
+	contexts := make([]runtime.ArtifactCtx, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		versions, err := e.services.Artifact.ListVersions(ctx, artifact.ID)
+		if err != nil {
+			return nil, fmt.Errorf("list artifact versions: %w", err)
+		}
+		if len(versions) == 0 {
+			continue
+		}
+		latest := versions[0]
+		contexts = append(contexts, runtime.ArtifactCtx{
+			ID:           artifact.ID,
+			VersionID:    latest.ID,
+			Version:      latest.Version,
+			Name:         artifact.Name,
+			ArtifactType: string(artifact.ArtifactType),
+			VersionURI:   latest.URI,
+			ContentType:  latest.ContentType,
+			Content:      extractInlineContent(latest.Metadata),
+		})
+	}
+	return contexts, nil
+}
+
+func buildReviewMetadata(artifactCtxs []runtime.ArtifactCtx) (map[string]any, *string) {
+	artifacts := make([]map[string]any, 0, len(artifactCtxs))
+	var artifactVersionID *string
+	for _, artifact := range artifactCtxs {
+		if artifact.VersionID != "" && artifactVersionID == nil {
+			versionIDCopy := artifact.VersionID
+			artifactVersionID = &versionIDCopy
+		}
+		entry := map[string]any{
+			"artifact_id":   artifact.ID,
+			"version_id":    artifact.VersionID,
+			"version":       artifact.Version,
+			"name":          artifact.Name,
+			"artifact_type": artifact.ArtifactType,
+			"version_uri":   artifact.VersionURI,
+			"content_type":  artifact.ContentType,
+		}
+		if artifact.Content != "" {
+			entry["content_preview"] = artifact.Content
+		}
+		artifacts = append(artifacts, entry)
+	}
+	return map[string]any{
+		"artifact_count": len(artifacts),
+		"artifacts":      artifacts,
+	}, artifactVersionID
+}
+
+func extractInlineContent(raw model.JSON) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	meta := map[string]any{}
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return ""
+	}
+	if content, ok := meta["inline_content"].(string); ok {
+		return content
+	}
+	return ""
 }
 
 func (e *Engine) processTransitionActions(ctx context.Context, task *model.Task, actions []runtime.TransitionAction) {

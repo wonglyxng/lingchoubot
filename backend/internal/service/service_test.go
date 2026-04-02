@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -171,6 +172,128 @@ func (r *fakeApprovalRepo) Decide(_ context.Context, id string, status model.App
 		approval.DecidedAt = &now
 	}
 	return nil
+}
+
+type fakeArtifactRepo struct {
+	artifacts map[string]*model.Artifact
+}
+
+func (r *fakeArtifactRepo) Create(_ context.Context, a *model.Artifact) error {
+	copyArtifact := *a
+	if copyArtifact.ID == "" {
+		copyArtifact.ID = fmt.Sprintf("artifact-%d", len(r.artifacts)+1)
+	}
+	if r.artifacts == nil {
+		r.artifacts = map[string]*model.Artifact{}
+	}
+	r.artifacts[copyArtifact.ID] = &copyArtifact
+	a.ID = copyArtifact.ID
+	return nil
+}
+
+func (r *fakeArtifactRepo) GetByID(_ context.Context, id string) (*model.Artifact, error) {
+	if r.artifacts == nil {
+		return nil, nil
+	}
+	artifact := r.artifacts[id]
+	if artifact == nil {
+		return nil, nil
+	}
+	copyArtifact := *artifact
+	return &copyArtifact, nil
+}
+
+func (r *fakeArtifactRepo) List(_ context.Context, p repository.ArtifactListParams) ([]*model.Artifact, int, error) {
+	items := make([]*model.Artifact, 0, len(r.artifacts))
+	for _, artifact := range r.artifacts {
+		if p.ProjectID != "" && artifact.ProjectID != p.ProjectID {
+			continue
+		}
+		if p.TaskID != "" {
+			if artifact.TaskID == nil || *artifact.TaskID != p.TaskID {
+				continue
+			}
+		}
+		if p.ArtifactType != "" && string(artifact.ArtifactType) != p.ArtifactType {
+			continue
+		}
+		copyArtifact := *artifact
+		items = append(items, &copyArtifact)
+	}
+	return items, len(items), nil
+}
+
+type fakeArtifactVersionRepo struct {
+	versions map[string]*model.ArtifactVersion
+}
+
+func (r *fakeArtifactVersionRepo) Create(_ context.Context, v *model.ArtifactVersion) error {
+	copyVersion := *v
+	if copyVersion.ID == "" {
+		copyVersion.ID = fmt.Sprintf("artifact-version-%d", len(r.versions)+1)
+	}
+	if r.versions == nil {
+		r.versions = map[string]*model.ArtifactVersion{}
+	}
+	r.versions[copyVersion.ID] = &copyVersion
+	v.ID = copyVersion.ID
+	return nil
+}
+
+func (r *fakeArtifactVersionRepo) GetByID(_ context.Context, id string) (*model.ArtifactVersion, error) {
+	if r.versions == nil {
+		return nil, nil
+	}
+	version := r.versions[id]
+	if version == nil {
+		return nil, nil
+	}
+	copyVersion := *version
+	return &copyVersion, nil
+}
+
+func (r *fakeArtifactVersionRepo) ListByArtifact(_ context.Context, artifactID string) ([]*model.ArtifactVersion, error) {
+	items := make([]*model.ArtifactVersion, 0, len(r.versions))
+	for _, version := range r.versions {
+		if version.ArtifactID != artifactID {
+			continue
+		}
+		copyVersion := *version
+		items = append(items, &copyVersion)
+	}
+	return items, nil
+}
+
+func (r *fakeArtifactVersionRepo) NextVersion(_ context.Context, artifactID string) (int, error) {
+	next := 1
+	for _, version := range r.versions {
+		if version.ArtifactID == artifactID && version.Version >= next {
+			next = version.Version + 1
+		}
+	}
+	return next, nil
+}
+
+type fakeArtifactStore struct {
+	uri             string
+	sizeBytes       int64
+	checksum        string
+	calls           int
+	lastName        string
+	lastContent     string
+	lastContentType string
+	err             error
+}
+
+func (s *fakeArtifactStore) Store(_ context.Context, name, content, contentType string) (string, int64, string, error) {
+	s.calls++
+	s.lastName = name
+	s.lastContent = content
+	s.lastContentType = contentType
+	if s.err != nil {
+		return "", 0, "", s.err
+	}
+	return s.uri, s.sizeBytes, s.checksum, nil
 }
 
 type fakeWorkflowRunRepo struct {
@@ -571,11 +694,24 @@ func TestReviewReportApprovedCreatesApprovalAndTransitionsTask(t *testing.T) {
 	reviewSvc := &ReviewReportService{repo: reviewRepo, taskSvc: taskSvc, approvalSvc: approvalSvc, audit: auditSvc}
 
 	rr := &model.ReviewReport{
-		RunID:      &runID,
-		TaskID:     "task-1",
-		ReviewerID: "reviewer-1",
-		Verdict:    model.ReviewVerdictApproved,
-		Summary:    "looks good",
+		RunID:             &runID,
+		TaskID:            "task-1",
+		ReviewerID:        "reviewer-1",
+		ArtifactVersionID: strPtr("artifact-version-1"),
+		Verdict:           model.ReviewVerdictApproved,
+		Summary:           "looks good",
+		Findings:          model.JSON(`["结构清晰"]`),
+		Recommendations:   model.JSON(`["可以进入审批"]`),
+		Metadata: model.JSON(`{
+			"artifact_count": 1,
+			"artifacts": [
+				{
+					"name": "需求文档",
+					"artifact_type": "prd",
+					"version_uri": "s3://artifacts/20240101/prd.md"
+				}
+			]
+		}`),
 	}
 	if err := reviewSvc.Create(ctx, rr); err != nil {
 		t.Fatalf("Create returned error: %v", err)
@@ -597,8 +733,14 @@ func TestReviewReportApprovedCreatesApprovalAndTransitionsTask(t *testing.T) {
 			t.Fatalf("approval request project_id = %q, want %q", ar.ProjectID, "proj-1")
 		}
 		var meta struct {
-			RunID   string `json:"run_id"`
-			PhaseID string `json:"phase_id"`
+			RunID             string   `json:"run_id"`
+			PhaseID           string   `json:"phase_id"`
+			ReviewID          string   `json:"review_id"`
+			ReviewSummary     string   `json:"review_summary"`
+			Findings          []string `json:"findings"`
+			Recommendations   []string `json:"recommendations"`
+			ArtifactCount     int      `json:"artifact_count"`
+			ArtifactVersionID string   `json:"artifact_version_id"`
 		}
 		if err := json.Unmarshal(ar.Metadata, &meta); err != nil {
 			t.Fatalf("unmarshal approval metadata: %v", err)
@@ -609,6 +751,99 @@ func TestReviewReportApprovedCreatesApprovalAndTransitionsTask(t *testing.T) {
 		if meta.PhaseID != phaseID {
 			t.Fatalf("approval metadata phase_id = %q, want %q", meta.PhaseID, phaseID)
 		}
+		if meta.ReviewID == "" {
+			t.Fatal("approval metadata missing review_id")
+		}
+		if meta.ReviewSummary != "looks good" {
+			t.Fatalf("approval metadata review_summary = %q, want %q", meta.ReviewSummary, "looks good")
+		}
+		if meta.ArtifactCount != 1 {
+			t.Fatalf("approval metadata artifact_count = %d, want 1", meta.ArtifactCount)
+		}
+		if meta.ArtifactVersionID != "artifact-version-1" {
+			t.Fatalf("approval metadata artifact_version_id = %q, want %q", meta.ArtifactVersionID, "artifact-version-1")
+		}
+		if len(meta.Findings) != 1 || meta.Findings[0] != "结构清晰" {
+			t.Fatalf("approval metadata findings = %#v, want [结构清晰]", meta.Findings)
+		}
+		if len(meta.Recommendations) != 1 || meta.Recommendations[0] != "可以进入审批" {
+			t.Fatalf("approval metadata recommendations = %#v, want [可以进入审批]", meta.Recommendations)
+		}
+		if !strings.Contains(ar.Description, "looks good") {
+			t.Fatalf("approval description = %q, want to contain review summary", ar.Description)
+		}
+	}
+}
+
+func TestArtifactServiceAddVersionStoresContentAndMetadata(t *testing.T) {
+	ctx := context.Background()
+	auditSvc, _ := newTestAuditService()
+	artifactRepo := &fakeArtifactRepo{
+		artifacts: map[string]*model.Artifact{
+			"artifact-1": {
+				ID:           "artifact-1",
+				ProjectID:    "proj-1",
+				Name:         "需求文档",
+				ArtifactType: model.ArtifactTypePRD,
+			},
+		},
+	}
+	versionRepo := &fakeArtifactVersionRepo{}
+	store := &fakeArtifactStore{
+		uri:       "s3://artifacts/20240101/需求文档.md",
+		sizeBytes: 18,
+		checksum:  "checksum-1",
+	}
+
+	svc := NewArtifactService(artifactRepo, versionRepo, auditSvc)
+	svc.SetContentStore(store)
+
+	version := &model.ArtifactVersion{
+		ArtifactID:    "artifact-1",
+		ContentType:   "text/markdown",
+		ChangeSummary: "初始版本",
+		CreatedBy:     strPtr("agent-1"),
+		Content:       "# 需求文档\n\n这里是正文。",
+	}
+	if err := svc.AddVersion(ctx, version); err != nil {
+		t.Fatalf("AddVersion returned error: %v", err)
+	}
+
+	if store.calls != 1 {
+		t.Fatalf("expected content store to be called once, got %d", store.calls)
+	}
+	if store.lastName != "需求文档.md" {
+		t.Fatalf("store name = %q, want %q", store.lastName, "需求文档.md")
+	}
+	if version.URI != store.uri {
+		t.Fatalf("version uri = %q, want %q", version.URI, store.uri)
+	}
+	if version.Checksum != store.checksum {
+		t.Fatalf("version checksum = %q, want %q", version.Checksum, store.checksum)
+	}
+	if version.SizeBytes != store.sizeBytes {
+		t.Fatalf("version size = %d, want %d", version.SizeBytes, store.sizeBytes)
+	}
+
+	storedVersion, ok := versionRepo.versions[version.ID]
+	if !ok {
+		t.Fatalf("stored version %q not found", version.ID)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(storedVersion.Metadata, &metadata); err != nil {
+		t.Fatalf("unmarshal version metadata: %v", err)
+	}
+	if metadata["stored_in"] != "minio" {
+		t.Fatalf("stored_in = %#v, want %q", metadata["stored_in"], "minio")
+	}
+	if metadata["source_name"] != "需求文档.md" {
+		t.Fatalf("source_name = %#v, want %q", metadata["source_name"], "需求文档.md")
+	}
+	if metadata["inline_content"] != version.Content {
+		t.Fatalf("inline_content = %#v, want %q", metadata["inline_content"], version.Content)
+	}
+	if storedVersion.Version != 1 {
+		t.Fatalf("stored version number = %d, want 1", storedVersion.Version)
 	}
 }
 
@@ -649,6 +884,10 @@ func TestReviewReportRejectedDoesNotCreateApproval(t *testing.T) {
 	if len(approvalRepo.approvals) != 0 {
 		t.Fatalf("expected 0 approval requests, got %d", len(approvalRepo.approvals))
 	}
+}
+
+func strPtr(s string) *string {
+	return &s
 }
 
 func TestWorkflowServiceRunLifecycle(t *testing.T) {

@@ -367,6 +367,23 @@ func (a *Activities) ActivityReviewer(ctx context.Context, input TaskChainInput)
 		st.fail(ctx, err.Error())
 		return nil, err
 	}
+	eng := &Engine{registry: a.Registry, services: a.Services, workflow: a.Workflow, logger: a.Logger}
+	artifactCtxs, err := eng.loadTaskArtifactContexts(ctx, task.ID)
+	if err != nil {
+		st.fail(ctx, err.Error())
+		return nil, err
+	}
+	var phaseCtx *runtime.PhaseCtx
+	if input.PhaseID != "" {
+		phase, phaseErr := a.Services.Phase.GetByID(ctx, input.PhaseID)
+		if phaseErr != nil {
+			st.fail(ctx, phaseErr.Error())
+			return nil, phaseErr
+		}
+		if phase != nil {
+			phaseCtx = &runtime.PhaseCtx{ID: phase.ID, ProjectID: proj.ID, Name: phase.Name, Description: phase.Description, SortOrder: phase.SortOrder}
+		}
+	}
 
 	taskInput := &runtime.AgentTaskInput{
 		RunID:       input.RunID,
@@ -375,7 +392,9 @@ func (a *Activities) ActivityReviewer(ctx context.Context, input TaskChainInput)
 		AgentLLM:    agentLLM,
 		Instruction: fmt.Sprintf("评审任务「%s」的交付物", task.Title),
 		Project:     &runtime.ProjectCtx{ID: proj.ID, Name: proj.Name, Description: proj.Description},
+		Phase:       phaseCtx,
 		Task:        &runtime.TaskCtx{ID: task.ID, ProjectID: proj.ID, PhaseID: input.PhaseID, Title: task.Title, Description: task.Description, Priority: task.Priority},
+		Artifacts:   artifactCtxs,
 	}
 
 	output, err := runner.Execute(taskInput)
@@ -388,8 +407,7 @@ func (a *Activities) ActivityReviewer(ctx context.Context, input TaskChainInput)
 		return nil, fmt.Errorf("reviewer failed: %s", output.Error)
 	}
 
-	eng := &Engine{registry: a.Registry, services: a.Services, workflow: a.Workflow, logger: a.Logger}
-	eng.processReviewActions(ctx, input.RunID, task.ID, agent.ID, output.Reviews)
+	eng.processReviewActions(ctx, input.RunID, task.ID, agent.ID, artifactCtxs, output.Reviews)
 
 	st.complete(ctx, output.Summary)
 	return &StepResult{Summary: output.Summary, StepCount: sortOrder}, nil

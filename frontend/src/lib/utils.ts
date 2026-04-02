@@ -139,3 +139,37 @@ export function relativeTime(dateStr?: string): string {
   const days = Math.floor(hours / 24);
   return `${days}天前`;
 }
+
+export function asRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, unknown>;
+}
+
+export function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+export function metadataString(metadata: Record<string, unknown>, key: string): string {
+  const value = metadata[key];
+  return typeof value === "string" ? value : "";
+}
+
+export function metadataNumber(metadata: Record<string, unknown>, key: string): number | null {
+  const value = metadata[key];
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return null;
+}
+
+export function truncateText(value: string, max = 240): string {
+  if (value.length <= max) {
+    return value;
+  }
+  return `${value.slice(0, max)}...`;
+}

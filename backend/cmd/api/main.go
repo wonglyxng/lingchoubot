@@ -66,6 +66,8 @@ func main() {
 	reviewSvc.SetApprovalService(approvalSvc)
 	toolCallSvc := service.NewToolCallService(toolCallRepo, auditSvc)
 	llmProviderSvc := service.NewLLMProviderService(llmProviderRepo, auditSvc)
+	artifactStore := gateway.NewArtifactStorageTool(cfg.MinIO, logger)
+	artifactSvc.SetContentStore(artifactStore)
 
 	bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer bootstrapCancel()
@@ -106,8 +108,7 @@ func main() {
 
 	// --- tool gateway ---
 	gw := gateway.NewGateway(toolCallSvc, agentSvc, contractSvc, auditSvc, logger)
-	artifactTool := gateway.NewArtifactStorageTool(cfg.MinIO, logger)
-	gw.RegisterDefaults(artifactTool)
+	gw.RegisterDefaults(artifactStore)
 	handler.NewToolCallHandler(toolCallSvc, gw).Register(mux)
 
 	// --- agent runtime & orchestrator ---

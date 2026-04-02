@@ -2,7 +2,9 @@ package orchestrator_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -114,6 +116,29 @@ func TestIntegration_HappyPath(t *testing.T) {
 	if verCount != 2 {
 		t.Errorf("artifact versions = %d, want 2", verCount)
 	}
+	artifacts, _, err := f.ArtifactSvc.List(ctx, repository.ArtifactListParams{ProjectID: proj.ID, Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("list artifacts: %v", err)
+	}
+	for _, artifact := range artifacts {
+		versions, err := f.ArtifactSvc.ListVersions(ctx, artifact.ID)
+		if err != nil {
+			t.Fatalf("list artifact versions: %v", err)
+		}
+		if len(versions) == 0 {
+			t.Fatalf("artifact %q has no versions", artifact.Name)
+		}
+		if versions[0].URI == "" {
+			t.Fatalf("artifact %q latest version missing uri", artifact.Name)
+		}
+		var meta map[string]any
+		if err := json.Unmarshal(versions[0].Metadata, &meta); err != nil {
+			t.Fatalf("unmarshal artifact version metadata: %v", err)
+		}
+		if meta["inline_content"] == "" {
+			t.Fatalf("artifact %q missing inline_content metadata", artifact.Name)
+		}
+	}
 
 	// ---- Verify Reviews ----
 	reviewCount := f.ReviewRepo.TotalCount()
@@ -127,6 +152,18 @@ func TestIntegration_HappyPath(t *testing.T) {
 	for _, review := range reviews {
 		if review.RunID == nil || *review.RunID != run.ID {
 			t.Errorf("review %q missing run_id %q", review.ID, run.ID)
+		}
+		if strings.Contains(review.Summary, "0 个交付物") {
+			t.Errorf("review %q summary = %q, want artifact count > 0", review.ID, review.Summary)
+		}
+		var meta struct {
+			ArtifactCount int `json:"artifact_count"`
+		}
+		if err := json.Unmarshal(review.Metadata, &meta); err != nil {
+			t.Fatalf("unmarshal review metadata: %v", err)
+		}
+		if meta.ArtifactCount <= 0 {
+			t.Errorf("review %q artifact_count = %d, want > 0", review.ID, meta.ArtifactCount)
 		}
 	}
 

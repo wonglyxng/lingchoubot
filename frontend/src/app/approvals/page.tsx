@@ -5,7 +5,7 @@ import { ShieldCheck, Wifi, WifiOff } from "lucide-react";
 import { api } from "@/lib/api";
 import type { ApprovalRequest } from "@/lib/types";
 import { StatusBadge } from "@/components/StatusBadge";
-import { formatTime, getApprovalStatus, relativeTime } from "@/lib/utils";
+import { asRecord, asStringArray, formatTime, getApprovalStatus, metadataNumber, relativeTime, truncateText } from "@/lib/utils";
 import { useEventStream, type SSEEvent } from "@/lib/useEventStream";
 
 type FilterTab = "all" | "pending" | "approved" | "rejected";
@@ -16,6 +16,32 @@ const TABS: { key: FilterTab; label: string }[] = [
   { key: "approved", label: "已批准" },
   { key: "rejected", label: "已拒绝" },
 ];
+
+type ApprovalArtifact = {
+  name: string;
+  artifactType: string;
+  versionUri: string;
+  contentPreview: string;
+};
+
+function getApprovalArtifacts(metadata: Record<string, unknown>): ApprovalArtifact[] {
+  const rawArtifacts = metadata.artifacts;
+  if (!Array.isArray(rawArtifacts)) {
+    return [];
+  }
+  return rawArtifacts
+    .map((item) => {
+      const record = asRecord(item);
+      return {
+        name: typeof record.name === "string" ? record.name : "未命名工件",
+        artifactType: typeof record.artifact_type === "string" ? record.artifact_type : "other",
+        versionUri: typeof record.version_uri === "string" ? record.version_uri : "",
+        contentPreview:
+          typeof record.content_preview === "string" ? record.content_preview : "",
+      };
+    })
+    .filter((item) => item.name || item.versionUri);
+}
 
 export default function ApprovalsPage() {
   const [tab, setTab] = useState<FilterTab>("all");
@@ -139,6 +165,14 @@ export default function ApprovalsPage() {
           {items.map((row) => {
             const st = getApprovalStatus(row.status);
             const pending = row.status === "pending";
+            const metadata = asRecord(row.metadata);
+            const reviewSummary = typeof metadata.review_summary === "string" ? metadata.review_summary : "";
+            const reviewId = typeof metadata.review_id === "string" ? metadata.review_id : "";
+            const taskTitle = typeof metadata.task_title === "string" ? metadata.task_title : "";
+            const findings = asStringArray(metadata.findings);
+            const recommendations = asStringArray(metadata.recommendations);
+            const artifacts = getApprovalArtifacts(metadata);
+            const artifactCount = metadataNumber(metadata, "artifact_count") ?? artifacts.length;
             return (
               <li
                 key={row.id}
@@ -154,6 +188,72 @@ export default function ApprovalsPage() {
                   <p className="text-sm text-gray-600">
                     {row.description?.trim() ? row.description : "—"}
                   </p>
+                  {(reviewSummary || findings.length > 0 || recommendations.length > 0 || artifacts.length > 0) && (
+                    <section className="rounded-lg border border-gray-100 bg-gray-50 p-4">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
+                        <span>审批依据</span>
+                        {reviewId && <span>评审报告: {reviewId.slice(0, 8)}</span>}
+                        {taskTitle && <span>任务: {taskTitle}</span>}
+                        <span>交付物: {artifactCount} 个</span>
+                      </div>
+
+                      {reviewSummary && (
+                        <p className="mt-3 text-sm leading-6 text-gray-700">{reviewSummary}</p>
+                      )}
+
+                      <div className="mt-3 grid gap-3 md:grid-cols-2">
+                        <div>
+                          <p className="text-xs font-medium uppercase tracking-wide text-gray-500">主要发现</p>
+                          {findings.length > 0 ? (
+                            <ul className="mt-2 space-y-2 text-sm text-gray-700">
+                              {findings.map((item, index) => (
+                                <li key={`${row.id}-finding-${index}`} className="rounded-md bg-white px-3 py-2">
+                                  {item}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="mt-2 text-sm text-gray-500">无</p>
+                          )}
+                        </div>
+                        <div>
+                          <p className="text-xs font-medium uppercase tracking-wide text-gray-500">整改建议</p>
+                          {recommendations.length > 0 ? (
+                            <ul className="mt-2 space-y-2 text-sm text-gray-700">
+                              {recommendations.map((item, index) => (
+                                <li key={`${row.id}-recommendation-${index}`} className="rounded-md bg-white px-3 py-2">
+                                  {item}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="mt-2 text-sm text-gray-500">无</p>
+                          )}
+                        </div>
+                      </div>
+
+                      {artifacts.length > 0 && (
+                        <div className="mt-3 space-y-2">
+                          {artifacts.map((artifact, index) => (
+                            <div key={`${row.id}-artifact-${index}`} className="rounded-md border border-gray-200 bg-white p-3">
+                              <div className="flex flex-wrap items-center gap-2 text-sm text-gray-900">
+                                <span className="font-medium">{artifact.name}</span>
+                                <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
+                                  {artifact.artifactType}
+                                </span>
+                              </div>
+                              <p className="mt-2 break-all text-xs text-gray-500">{artifact.versionUri || "未记录版本 URI"}</p>
+                              {artifact.contentPreview && (
+                                <pre className="mt-3 whitespace-pre-wrap break-words rounded-md bg-gray-950 px-3 py-2 text-xs leading-6 text-gray-100">
+                                  {truncateText(artifact.contentPreview, 500)}
+                                </pre>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </section>
+                  )}
                   <p className="text-xs text-gray-500">
                     <span className="text-gray-600">{formatTime(row.created_at)}</span>
                     <span className="mx-2 text-gray-300">·</span>

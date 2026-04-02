@@ -41,4 +41,6 @@ type ArtifactVersion struct {
 	CreatedBy     *string   `json:"created_by,omitempty"`
 	Metadata      JSON      `json:"metadata"`
 	CreatedAt     time.Time `json:"created_at"`
+	Content       string    `json:"content,omitempty"`
+	SourceName    string    `json:"source_name,omitempty"`
 }

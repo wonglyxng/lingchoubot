@@ -87,11 +87,22 @@ func (t *ArtifactStorageTool) Execute(ctx context.Context, input map[string]any)
 	content, _ := input["content"].(string)
 	contentType, _ := input["content_type"].(string)
 
+	uri, sizeBytes, checksum, err := t.Store(ctx, name, content, contentType)
+	if err != nil {
+		return &ToolResult{Status: "failed", Error: err.Error()}, nil
+	}
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	return t.buildResult(uri, name, contentType, int(sizeBytes), checksum), nil
+}
+
+func (t *ArtifactStorageTool) Store(ctx context.Context, name, content, contentType string) (string, int64, string, error) {
 	if name == "" {
-		return &ToolResult{Status: "failed", Error: "name is required"}, nil
+		return "", 0, "", fmt.Errorf("name is required")
 	}
 	if content == "" {
-		return &ToolResult{Status: "failed", Error: "content is required"}, nil
+		return "", 0, "", fmt.Errorf("content is required")
 	}
 	if contentType == "" {
 		contentType = "application/octet-stream"
@@ -104,19 +115,19 @@ func (t *ArtifactStorageTool) Execute(ctx context.Context, input map[string]any)
 	if t.client == nil {
 		uri := fmt.Sprintf("mock://minio/%s/%s", t.bucket, objectKey)
 		t.logger.Info("artifact stored (fallback)", "uri", uri)
-		return t.buildResult(uri, name, contentType, len(content), checksum), nil
+		return uri, int64(len(content)), checksum, nil
 	}
 
 	reader := strings.NewReader(content)
 	info, err := t.client.PutObject(ctx, t.bucket, objectKey, reader, int64(len(content)),
 		minio.PutObjectOptions{ContentType: contentType})
 	if err != nil {
-		return &ToolResult{Status: "failed", Error: fmt.Sprintf("minio upload failed: %v", err)}, nil
+		return "", 0, "", fmt.Errorf("minio upload failed: %v", err)
 	}
 
 	uri := fmt.Sprintf("s3://%s/%s", t.bucket, info.Key)
 	t.logger.Info("artifact stored", "uri", uri, "size", info.Size)
-	return t.buildResult(uri, name, contentType, int(info.Size), checksum), nil
+	return uri, info.Size, checksum, nil
 }
 
 func (t *ArtifactStorageTool) buildResult(uri, name, contentType string, size int, checksum string) *ToolResult {

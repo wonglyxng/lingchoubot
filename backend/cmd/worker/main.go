@@ -7,6 +7,7 @@ import (
 	"syscall"
 
 	"github.com/lingchou/lingchoubot/backend/internal/config"
+	"github.com/lingchou/lingchoubot/backend/internal/gateway"
 	"github.com/lingchou/lingchoubot/backend/internal/orchestrator"
 	"github.com/lingchou/lingchoubot/backend/internal/repository"
 	"github.com/lingchou/lingchoubot/backend/internal/runtime"
@@ -62,6 +63,8 @@ func main() {
 	approvalSvc := service.NewApprovalRequestService(approvalRepo, taskSvc, auditSvc)
 	_ = service.NewToolCallService(toolCallRepo, auditSvc)
 	workflowSvc := service.NewWorkflowService(workflowRunRepo, workflowStepRepo, auditSvc)
+	artifactStore := gateway.NewArtifactStorageTool(cfg.MinIO, logger)
+	artifactSvc.SetContentStore(artifactStore)
 
 	orchServices := &orchestrator.Services{
 		Project:    projectSvc,

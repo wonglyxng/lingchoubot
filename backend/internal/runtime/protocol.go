@@ -67,9 +67,13 @@ type ContractCtx struct {
 
 type ArtifactCtx struct {
 	ID           string `json:"id"`
+	VersionID    string `json:"version_id,omitempty"`
+	Version      int    `json:"version,omitempty"`
 	Name         string `json:"name"`
 	ArtifactType string `json:"artifact_type"`
 	VersionURI   string `json:"version_uri"`
+	ContentType  string `json:"content_type,omitempty"`
+	Content      string `json:"content,omitempty"`
 }
 
 // AgentTaskOutput is the structured result returned by an agent after execution.

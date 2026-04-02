@@ -71,7 +71,10 @@ func (s *ReviewReportService) Create(ctx context.Context, rr *model.ReviewReport
 		if s.approvalSvc != nil {
 			task, _ := s.taskSvc.GetByID(ctx, rr.TaskID)
 			if task != nil {
-				metadata := map[string]string{}
+				metadata, err := approvalMetadataFromReview(rr, task)
+				if err != nil {
+					return fmt.Errorf("build approval metadata: %w", err)
+				}
 				if rr.RunID != nil {
 					metadata["run_id"] = *rr.RunID
 				}
@@ -89,7 +92,7 @@ func (s *ReviewReportService) Create(ctx context.Context, rr *model.ReviewReport
 					TaskID:      &rr.TaskID,
 					RequestedBy: rr.ReviewerID,
 					Title:       fmt.Sprintf("任务「%s」评审通过，请审批", task.Title),
-					Description: fmt.Sprintf("评审报告 %s 结论为通过，等待审批确认", rr.ID),
+					Description: approvalDescription(rr, metadata),
 					Metadata:    metaJSON,
 				}
 				if err := s.approvalSvc.Create(ctx, ar); err != nil {
@@ -108,4 +111,63 @@ func (s *ReviewReportService) GetByID(ctx context.Context, id string) (*model.Re
 
 func (s *ReviewReportService) List(ctx context.Context, p repository.ReviewListParams) ([]*model.ReviewReport, int, error) {
 	return s.repo.List(ctx, p)
+}
+
+func approvalMetadataFromReview(rr *model.ReviewReport, task *model.Task) (map[string]any, error) {
+	metadata := map[string]any{
+		"review_id":      rr.ID,
+		"review_verdict": rr.Verdict,
+		"review_summary": rr.Summary,
+		"task_title":     task.Title,
+	}
+	if rr.ArtifactVersionID != nil {
+		metadata["artifact_version_id"] = *rr.ArtifactVersionID
+	}
+	findings, err := jsonArrayToStrings(rr.Findings)
+	if err != nil {
+		return nil, err
+	}
+	recommendations, err := jsonArrayToStrings(rr.Recommendations)
+	if err != nil {
+		return nil, err
+	}
+	metadata["findings"] = findings
+	metadata["recommendations"] = recommendations
+
+	if len(rr.Metadata) == 0 {
+		return metadata, nil
+	}
+	reviewMeta := map[string]any{}
+	if err := json.Unmarshal(rr.Metadata, &reviewMeta); err != nil {
+		return nil, fmt.Errorf("parse review metadata: %w", err)
+	}
+	for key, value := range reviewMeta {
+		metadata[key] = value
+	}
+	return metadata, nil
+}
+
+func approvalDescription(rr *model.ReviewReport, metadata map[string]any) string {
+	description := fmt.Sprintf("评审报告 %s 已通过。结论摘要：%s", rr.ID, rr.Summary)
+	if artifactCount, ok := metadata["artifact_count"].(int); ok && artifactCount > 0 {
+		description = fmt.Sprintf("%s。关联交付物 %d 个，等待审批确认。", description, artifactCount)
+	}
+	if artifactCountFloat, ok := metadata["artifact_count"].(float64); ok && int(artifactCountFloat) > 0 {
+		description = fmt.Sprintf("%s。关联交付物 %d 个，等待审批确认。", description, int(artifactCountFloat))
+	}
+	if description == fmt.Sprintf("评审报告 %s 已通过。结论摘要：%s", rr.ID, rr.Summary) {
+		return description + "，等待审批确认。"
+	}
+	return description
+}
+
+func jsonArrayToStrings(raw model.JSON) ([]string, error) {
+	if len(raw) == 0 {
+		return []string{}, nil
+	}
+	var items []string
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, fmt.Errorf("parse json array: %w", err)
+	}
+	return items, nil
 }
