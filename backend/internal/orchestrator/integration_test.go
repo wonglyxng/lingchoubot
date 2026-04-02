@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/lingchou/lingchoubot/backend/internal/model"
 	"github.com/lingchou/lingchoubot/backend/internal/orchestrator"
@@ -320,8 +321,8 @@ func (r *alwaysRejectReviewer) Execute(_ *runtime.AgentTaskInput) (*runtime.Agen
 }
 
 type failOnceWorker struct {
-	mu      sync.Mutex
-	failed  bool
+	mu       sync.Mutex
+	failed   bool
 	fallback runtime.AgentRunner
 }
 
@@ -387,9 +388,20 @@ func TestIntegration_LLMFailureWaitsForManualInterventionAndResume(t *testing.T)
 		t.Fatalf("ResumeRun: %v", err)
 	}
 
-	finalRun, err := f.WorkflowSvc.GetRun(ctx, run.ID)
-	if err != nil {
-		t.Fatalf("GetRun after resume: %v", err)
+	var finalRun *model.WorkflowRun
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		finalRun, err = f.WorkflowSvc.GetRun(ctx, run.ID)
+		if err != nil {
+			t.Fatalf("GetRun after resume: %v", err)
+		}
+		if finalRun != nil && finalRun.Status == model.WorkflowRunWaitingApproval {
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if finalRun == nil {
 		t.Fatal("run not found after resume")

@@ -187,6 +187,9 @@ func artifactVersionMetadata(raw model.JSON) (map[string]any, error) {
 	if err := json.Unmarshal(raw, &meta); err != nil {
 		return nil, err
 	}
+	if meta == nil {
+		return map[string]any{}, nil
+	}
 	return meta, nil
 }
 
