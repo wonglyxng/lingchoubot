@@ -42,29 +42,31 @@ func main() {
 	mustCheck("API 服务", "GET", "/healthz")
 	mustCheck("数据库连接", "GET", "/readyz")
 
-	// --- Step 2: 注册 Agent 组织树 ---
-	next("注册 Agent 组织树（PM → Supervisor → Worker / Reviewer）")
+	// --- Step 2: 校验并补齐 Agent 组织树 ---
+	next("校验并补齐 Agent 组织树（严格 LLM baseline）")
 
-	pmID := mustCreateAgentFull("灵筹-项目经理", "pm", "PM_SUPERVISOR",
+	pmID := mustEnsureAgentFull("PM Agent", "pm", "PM_SUPERVISOR",
 		[]string{"DEVELOPMENT_SUPERVISOR", "QA_SUPERVISOR"},
-		"", "项目分解、阶段规划与任务创建", []string{"tool.*"}, "mock", "general")
-	supID := mustCreateAgentFull("灵筹-开发主管", "supervisor", "DEVELOPMENT_SUPERVISOR",
-		[]string{"BACKEND_DEV_WORKER", "FRONTEND_DEV_WORKER"},
-		pmID, "开发任务契约制定、执行分派与监督", []string{"tool.*"}, "mock", "general")
-	qaSupID := mustCreateAgentFull("灵筹-测试主管", "supervisor", "QA_SUPERVISOR",
+		"", "项目负责人，负责项目级规划、协调与汇总。", nil, "llm", "general")
+	supID := mustEnsureAgentFull("Development Supervisor", "supervisor", "DEVELOPMENT_SUPERVISOR",
+		[]string{"GENERAL_WORKER", "BACKEND_DEV_WORKER", "FRONTEND_DEV_WORKER"},
+		pmID, "开发主管，负责开发域任务契约、分派与返工协调。", nil, "llm", "general")
+	qaSupID := mustEnsureAgentFull("QA Supervisor", "supervisor", "QA_SUPERVISOR",
 		[]string{"QA_WORKER", "REVIEWER_WORKER"},
-		pmID, "测试与评审任务管理、质量门", []string{"tool.*"}, "mock", "qa")
-	wkID := mustCreateAgentFull("灵筹-后端执行者", "worker", "BACKEND_DEV_WORKER", nil,
-		supID, "后端任务执行、工件生成与交接", []string{"tool.doc_generator", "tool.artifact_storage", "tool.test_runner"}, "mock", "backend")
-	wkFeID := mustCreateAgentFull("灵筹-前端执行者", "worker", "FRONTEND_DEV_WORKER", nil,
-		supID, "前端任务执行、页面实现", []string{"tool.doc_generator", "tool.artifact_storage"}, "mock", "frontend")
-	qaWkID := mustCreateAgentFull("灵筹-测试执行者", "worker", "QA_WORKER", nil,
-		qaSupID, "执行测试验证与测试工件产出", []string{"tool.test_runner"}, "mock", "qa")
-	rvID := mustCreateAgentFull("灵筹-评审员", "reviewer", "REVIEWER_WORKER", nil,
-		qaSupID, "独立评审、质量检查与评审报告", []string{"tool.*"}, "mock", "qa")
+		pmID, "测试主管，负责 QA 任务编排、质量门把控与评审协调。", nil, "llm", "qa")
+	generalWkID := mustEnsureAgentFull("General Worker", "worker", "GENERAL_WORKER", nil,
+		supID, "通用分析执行 Agent，负责需求梳理、可行性评估与文档类交付。", []string{"tool.artifact_storage"}, "llm", "general")
+	wkID := mustEnsureAgentFull("Backend Worker", "worker", "BACKEND_DEV_WORKER", nil,
+		supID, "后端执行 Agent，负责 API、服务和数据库相关开发。", []string{"tool.artifact_storage"}, "llm", "backend")
+	wkFeID := mustEnsureAgentFull("Frontend Worker", "worker", "FRONTEND_DEV_WORKER", nil,
+		supID, "前端执行 Agent，负责页面实现与交互开发。", []string{"tool.artifact_storage"}, "llm", "frontend")
+	qaWkID := mustEnsureAgentFull("QA Worker", "worker", "QA_WORKER", nil,
+		qaSupID, "测试执行 Agent，负责验证、回归和测试交付。", nil, "llm", "qa")
+	rvID := mustEnsureAgentFull("Reviewer Agent", "reviewer", "REVIEWER_WORKER", nil,
+		qaSupID, "独立评审 Agent，负责对交付结果进行质量评审。", nil, "llm", "general")
 
-	printOK("已注册 7 个 Agent: PM(%s), DevSup(%s), QASup(%s), BackendWk(%s), FrontendWk(%s), QAWk(%s), Reviewer(%s)",
-		short(pmID), short(supID), short(qaSupID), short(wkID), short(wkFeID), short(qaWkID), short(rvID))
+	printOK("已校验 8 个 Agent: PM(%s), DevSup(%s), QASup(%s), GeneralWk(%s), BackendWk(%s), FrontendWk(%s), QAWk(%s), Reviewer(%s)",
+		short(pmID), short(supID), short(qaSupID), short(generalWkID), short(wkID), short(wkFeID), short(qaWkID), short(rvID))
 
 	// --- Step 3: 创建 Demo 项目 ---
 	next("创建 Demo 项目")
@@ -209,7 +211,7 @@ func main() {
 	}
 
 	// --- Step 7: Tool Gateway 演示 ---
-	next("Tool Gateway 演示（调用文档生成工具）")
+	next("Tool Gateway 演示（调用 artifact_storage）")
 
 	tools := mustListItems("可用工具", "GET", "/api/v1/tools")
 	fmt.Printf("  已注册工具: ")
@@ -230,7 +232,7 @@ func main() {
 			break
 		}
 	}
-	toolResult := mustCallTool(wkID, toolTaskID)
+	toolResult := mustCallArtifactStorageTool(generalWkID, toolTaskID)
 	toolStatus := getString(toolResult, "status")
 	printOK("工具调用完成: 状态=%s", toolStatus)
 
@@ -295,7 +297,7 @@ func main() {
 		fmt.Println("  [✓] 审批拒绝后任务回退 revision_required")
 		fmt.Println("  [✓] revision_required → in_progress 恢复路径")
 	}
-	fmt.Println("  [✓] Tool Gateway 工具调用")
+	fmt.Println("  [✓] Tool Gateway 调用 artifact_storage")
 	fmt.Println("  [✓] 全链路审计日志写入")
 	fmt.Println("  [✓] 项目级/任务级审计时间线可查")
 	fmt.Println()
@@ -398,8 +400,12 @@ func mustCreateAgentFull(name, role, roleCode string, managedRoles []string, rep
 		"specialization": specialization,
 		"description":    desc,
 		"status":         "active",
-		"capabilities":   capabilities,
+		"allowed_tools":  capabilities,
+		"capabilities":   []string{},
 		"metadata":       map[string]any{},
+	}
+	if agentType == "llm" {
+		body["metadata"] = map[string]any{"llm": map[string]any{"provider": "openai", "model": "gpt-4.1-mini"}}
 	}
 	if roleCode != "" {
 		body["role_code"] = roleCode
@@ -440,6 +446,57 @@ func mustCreateProject(name, desc string) string {
 		fatal("创建项目响应缺少 data")
 	}
 	return getString(data, "id")
+}
+
+func mustEnsureAgentFull(name, role, roleCode string, managedRoles []string, reportsTo, desc string, allowedTools []string, agentType, specialization string) string {
+	existing := findAgentByRoleCode(roleCode)
+	if existing == nil {
+		return mustCreateAgentFull(name, role, roleCode, managedRoles, reportsTo, desc, allowedTools, agentType, specialization)
+	}
+
+	body := map[string]any{
+		"name":           name,
+		"role":           role,
+		"role_code":      roleCode,
+		"agent_type":     agentType,
+		"specialization": specialization,
+		"description":    desc,
+		"status":         "active",
+		"managed_roles":  managedRoles,
+		"allowed_tools":  allowedTools,
+		"capabilities":   []string{},
+		"metadata":       map[string]any{},
+	}
+	if agentType == "llm" {
+		body["metadata"] = map[string]any{"llm": map[string]any{"provider": "openai", "model": "gpt-4.1-mini"}}
+	}
+	if reportsTo != "" {
+		body["reports_to"] = reportsTo
+	}
+
+	result, code := doRequest("PUT", "/api/v1/agents/"+getString(existing, "id"), body)
+	if code >= 400 {
+		fatal("更新 Agent「%s」失败: %v", name, result)
+	}
+	data := getMap(result, "data")
+	if data == nil {
+		fatal("更新 Agent 响应缺少 data")
+	}
+	return getString(data, "id")
+}
+
+func findAgentByRoleCode(roleCode string) map[string]any {
+	agents := mustListItems("Agent", "GET", "/api/v1/agents?limit=200")
+	for _, item := range agents {
+		agent, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if getString(agent, "role_code") == roleCode {
+			return agent
+		}
+	}
+	return nil
 }
 
 func mustStartWorkflow(projectID string) map[string]any {
@@ -592,15 +649,15 @@ func mustTransitionTask(taskID, newStatus string) {
 	}
 }
 
-func mustCallTool(agentID, taskID string) map[string]any {
+func mustCallArtifactStorageTool(agentID, taskID string) map[string]any {
 	body := map[string]any{
-		"tool_name": "doc_generator",
+		"tool_name": "artifact_storage",
 		"agent_id":  agentID,
-		"task_id":   taskID,
+		"action":    "write",
 		"input": map[string]any{
-			"title":   "端到端 Demo 验证报告",
-			"content": "本报告由灵筹 Demo 脚本自动生成，验证 Tool Gateway 调用链路。",
-			"format":  "markdown",
+			"name":         fmt.Sprintf("demo-validation-%s.md", time.Now().Format("20060102150405")),
+			"content":      fmt.Sprintf("# Demo Tool Gateway 验证\n\n- task_id: %s\n- generated_at: %s\n- note: 使用 artifact_storage 验证严格模式下的真实工具调用链路。\n", taskID, time.Now().Format(time.RFC3339)),
+			"content_type": "text/markdown",
 		},
 	}
 	result, code := doRequest("POST", "/api/v1/tools/call", body)

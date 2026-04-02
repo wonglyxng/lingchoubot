@@ -6,7 +6,7 @@ import (
 )
 
 func TestArtifactStorageTool_StrictFailure(t *testing.T) {
-	tool := NewMockArtifactStorageTool()
+	tool := NewUnavailableArtifactStorageTool()
 
 	if tool.Name() != "artifact_storage" {
 		t.Fatalf("unexpected name: %s", tool.Name())

@@ -2,45 +2,22 @@ package gateway
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"time"
 )
 
-// DocGeneratorTool generates structured documents based on input parameters.
-// In MVP this produces mock Markdown content; future versions will call an LLM.
+// DocGeneratorTool is a deprecated mock tool kept only for backward-compatible types.
+// It is no longer registered in the production gateway.
 type DocGeneratorTool struct{}
 
 func (t *DocGeneratorTool) Name() string        { return "doc_generator" }
-func (t *DocGeneratorTool) Description() string  { return "生成结构化文档（需求文档、设计文档、测试报告等）" }
+func (t *DocGeneratorTool) Description() string  { return "已停用：不再生成占位文档，请改用真实 LLM Agent 产出工件" }
 func (t *DocGeneratorTool) RequiredPermissions() []string { return []string{"tool.doc_generator"} }
 
 func (t *DocGeneratorTool) Execute(ctx context.Context, input map[string]any) (*ToolResult, error) {
-	docType, _ := input["doc_type"].(string)
-	title, _ := input["title"].(string)
-	context_, _ := input["context"].(string)
-
-	if title == "" {
-		return &ToolResult{Status: "failed", Error: "title is required"}, nil
-	}
-	if docType == "" {
-		docType = "general"
-	}
-
-	content := generateDocContent(docType, title, context_)
-	checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(content)))
-
 	return &ToolResult{
-		Status: "success",
-		Output: map[string]any{
-			"title":        title,
-			"doc_type":     docType,
-			"content":      content,
-			"content_type": "text/markdown",
-			"size_bytes":   len(content),
-			"checksum":     checksum,
-			"generated_at": time.Now().Format(time.RFC3339),
-		},
+		Status: "failed",
+		Error:  fmt.Sprintf("tool %s has been removed from the strict runtime; generate the document through a real llm agent instead", t.Name()),
 	}, nil
 }
 

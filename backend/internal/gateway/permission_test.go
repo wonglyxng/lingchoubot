@@ -141,7 +141,7 @@ func TestRiskLevelConstants(t *testing.T) {
 }
 
 func TestArtifactStorageTool_Actions(t *testing.T) {
-	tool := NewMockArtifactStorageTool()
+	tool := NewUnavailableArtifactStorageTool()
 
 	actions := tool.Actions()
 	expected := map[string]bool{"read": true, "write": true, "delete": true}
@@ -156,7 +156,7 @@ func TestArtifactStorageTool_Actions(t *testing.T) {
 }
 
 func TestArtifactStorageTool_RiskLevel(t *testing.T) {
-	tool := NewMockArtifactStorageTool()
+	tool := NewUnavailableArtifactStorageTool()
 
 	tests := []struct {
 		action string

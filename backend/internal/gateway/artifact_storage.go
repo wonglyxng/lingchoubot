@@ -15,8 +15,7 @@ import (
 )
 
 // ArtifactStorageTool uploads artifact content to MinIO object storage.
-// When MinIO is unreachable it falls back to a mock URI so development without
-// a running MinIO instance still works.
+// Initialization or runtime failures are surfaced explicitly to the caller.
 type ArtifactStorageTool struct {
 	client *minio.Client
 	bucket string
@@ -147,9 +146,9 @@ func (t *ArtifactStorageTool) buildResult(uri, name, contentType string, size in
 	}
 }
 
-// NewMockArtifactStorageTool returns an unavailable storage tool for tests that
-// only need interface coverage or explicit failure behavior.
-func NewMockArtifactStorageTool() *ArtifactStorageTool {
+// NewUnavailableArtifactStorageTool returns an unavailable storage tool for tests
+// and strict fallback registration paths that must fail explicitly.
+func NewUnavailableArtifactStorageTool() *ArtifactStorageTool {
 	return &ArtifactStorageTool{
 		bucket:  "lingchou-artifacts",
 		logger:  slog.Default(),

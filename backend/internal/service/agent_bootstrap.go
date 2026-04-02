@@ -31,7 +31,7 @@ func BaselineAgentSpecs() []BaselineAgentSpec {
 				Specialization: model.AgentSpecGeneral,
 				Description:    "项目负责人，负责项目级规划、协调与汇总。",
 				ManagedRoles:   model.JSON(`["DEVELOPMENT_SUPERVISOR","QA_SUPERVISOR"]`),
-				AllowedTools:   model.JSON(`["doc_generator"]`),
+				AllowedTools:   model.JSON(`[]`),
 				Capabilities:   model.JSON(`{}`),
 				Metadata:       defaultBaselineAgentMetadata(),
 			},

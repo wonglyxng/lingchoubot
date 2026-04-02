@@ -119,6 +119,9 @@ func TestEnsureBaselineAgentsCreatesHierarchy(t *testing.T) {
 	if pm == nil {
 		t.Fatal("missing PM baseline agent")
 	}
+	if string(pm.AllowedTools) != "[]" {
+		t.Fatalf("pm allowed tools = %s, want []", string(pm.AllowedTools))
+	}
 	devSup := byRoleCode[model.RoleCodeDevelopmentSupervisor]
 	if devSup == nil || devSup.ReportsTo == nil || *devSup.ReportsTo != pm.ID {
 		t.Fatal("development supervisor should report to PM")

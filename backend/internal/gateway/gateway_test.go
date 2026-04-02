@@ -1,6 +1,9 @@
 package gateway
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestMatchCapabilities(t *testing.T) {
 	tests := []struct {
@@ -66,5 +69,36 @@ func TestMatchCapabilities(t *testing.T) {
 				t.Errorf("matchCapabilities() error = %v, wantErr = %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestRegisterDefaultsRegistersOnlyArtifactStorage(t *testing.T) {
+	g := NewGateway(nil, nil, nil, nil, nil)
+	g.RegisterDefaults(nil)
+
+	tools := g.ListTools()
+	if len(tools) != 1 {
+		t.Fatalf("registered tools = %d, want 1", len(tools))
+	}
+	if tools[0].Name != "artifact_storage" {
+		t.Fatalf("registered tool = %s, want artifact_storage", tools[0].Name)
+	}
+}
+
+func TestDeprecatedMockToolsFailClosed(t *testing.T) {
+	docResult, err := (&DocGeneratorTool{}).Execute(context.Background(), map[string]any{"title": "demo"})
+	if err != nil {
+		t.Fatalf("doc generator returned unexpected error: %v", err)
+	}
+	if docResult.Status != "failed" {
+		t.Fatalf("doc generator status = %s, want failed", docResult.Status)
+	}
+
+	testResult, err := (&TestRunnerTool{}).Execute(context.Background(), map[string]any{"suite_name": "demo"})
+	if err != nil {
+		t.Fatalf("test runner returned unexpected error: %v", err)
+	}
+	if testResult.Status != "failed" {
+		t.Fatalf("test runner status = %s, want failed", testResult.Status)
 	}
 }
