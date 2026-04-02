@@ -15,6 +15,7 @@ import {
   ArrowRightLeft,
   Wrench,
   FileText,
+  BrainCircuit,
 } from "lucide-react";
 
 const navItems = [
@@ -29,6 +30,7 @@ const navItems = [
   { href: "/tool-calls", label: "工具调用", icon: Wrench },
   { href: "/contracts", label: "任务契约", icon: FileText },
   { href: "/approvals", label: "审批", icon: ShieldCheck },
+  { href: "/model-config", label: "模型配置", icon: BrainCircuit },
   { href: "/audit", label: "审计", icon: ScrollText },
 ];
 

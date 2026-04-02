@@ -124,3 +124,18 @@ type ToolCallRepository interface {
 	Complete(ctx context.Context, id string, status model.ToolCallStatus, output model.JSON, errMsg string, durationMs int) error
 	UpdateDenied(ctx context.Context, id string, reason string) error
 }
+
+type LLMProviderRepository interface {
+	Create(ctx context.Context, p *model.LLMProvider) error
+	GetByID(ctx context.Context, id string) (*model.LLMProvider, error)
+	GetByKey(ctx context.Context, key string) (*model.LLMProvider, error)
+	List(ctx context.Context, enabledOnly bool) ([]*model.LLMProvider, error)
+	Update(ctx context.Context, p *model.LLMProvider) error
+	Delete(ctx context.Context, id string) error
+	CreateModel(ctx context.Context, m *model.LLMModel) error
+	GetModelByID(ctx context.Context, id string) (*model.LLMModel, error)
+	ListModelsByProvider(ctx context.Context, providerID string) ([]*model.LLMModel, error)
+	ListAllModels(ctx context.Context) ([]*model.LLMModel, error)
+	UpdateModel(ctx context.Context, m *model.LLMModel) error
+	DeleteModel(ctx context.Context, id string) error
+}

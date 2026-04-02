@@ -220,6 +220,33 @@ export interface WorkflowStep {
   completed_at?: string;
 }
 
+export interface LLMProvider {
+  id: string;
+  key: string;
+  name: string;
+  base_url: string;
+  api_key?: string;
+  is_builtin: boolean;
+  is_enabled: boolean;
+  sort_order: number;
+  metadata: Record<string, unknown>;
+  models?: LLMModel[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LLMModel {
+  id: string;
+  provider_id: string;
+  model_id: string;
+  name: string;
+  is_default: boolean;
+  sort_order: number;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ListResponse<T> {
   items: T[];
   total: number;

@@ -6,14 +6,17 @@ import { api } from "@/lib/api";
 import type { Agent } from "@/lib/types";
 import { getAgentRole, getAgentType, getAgentSpec } from "@/lib/utils";
 import {
-  agentLLMProviderOptions,
+  type AgentLLMProviderOption,
+  agentLLMProviderOptions as fallbackProviderOptions,
   DEFAULT_AGENT_LLM_PROVIDER,
-  getAgentLLMModelOptions,
-  getAgentLLMProviderLabel,
-  getDefaultAgentLLMModel,
-  isPresetAgentLLMModel,
+  DEFAULT_AGENT_LLM_MODEL,
+  getDefaultModel,
+  getModelOptions,
+  getProviderLabel,
+  isPresetModel,
   mergeAgentLLMMetadata,
   readAgentLLMConfig,
+  toProviderOptions,
 } from "@/lib/agent-llm";
 import { FormModal, FormField, inputClass, textareaClass, selectClass } from "@/components/FormModal";
 
@@ -38,7 +41,7 @@ function createEmptyAgentForm(): AgentFormState {
     specialization: "general",
     reports_to: "",
     llm_provider: DEFAULT_AGENT_LLM_PROVIDER,
-    llm_model: getDefaultAgentLLMModel(DEFAULT_AGENT_LLM_PROVIDER),
+    llm_model: DEFAULT_AGENT_LLM_MODEL,
     metadata: {},
   };
 }
@@ -148,13 +151,19 @@ export default function AgentsPage() {
   const [form, setForm] = useState<AgentFormState>(createEmptyAgentForm());
   const [editTarget, setEditTarget] = useState<Agent | null>(null);
   const [editForm, setEditForm] = useState<AgentFormState>(createEmptyAgentForm());
+  const [providerOptions, setProviderOptions] = useState<AgentLLMProviderOption[]>(fallbackProviderOptions);
 
   const load = useCallback(() => {
     setLoading(true);
     setError(null);
-    api.agents
-      .orgTree()
-      .then((list) => setItems(Array.isArray(list) ? list : []))
+    Promise.all([
+      api.agents.orgTree(),
+      api.llmProviders.list(true).then((res) => {
+        const opts = toProviderOptions(Array.isArray(res.items) ? res.items : []);
+        if (opts.length > 0) setProviderOptions(opts);
+      }).catch(() => { /* keep fallback */ }),
+    ])
+      .then(([list]) => setItems(Array.isArray(list) ? list : []))
       .catch((e: Error) => setError(e.message || "加载失败"))
       .finally(() => setLoading(false));
   }, []);
@@ -218,8 +227,8 @@ export default function AgentsPage() {
   };
 
   const rows = useMemo(() => buildDisplayOrder(items), [items]);
-  const createModelOptions = getAgentLLMModelOptions(form.llm_provider);
-  const editModelOptions = getAgentLLMModelOptions(editForm.llm_provider);
+  const createModelOptions = getModelOptions(providerOptions, form.llm_provider);
+  const editModelOptions = getModelOptions(providerOptions, editForm.llm_provider);
 
   return (
     <div className="min-h-full bg-gray-50 p-6">
@@ -286,10 +295,10 @@ export default function AgentsPage() {
                   onChange={(e) => setForm((f) => ({
                     ...f,
                     llm_provider: e.target.value,
-                    llm_model: getDefaultAgentLLMModel(e.target.value),
+                    llm_model: getDefaultModel(providerOptions, e.target.value),
                   }))}
                 >
-                  {agentLLMProviderOptions.map((option) => (
+                  {providerOptions.map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
@@ -297,7 +306,7 @@ export default function AgentsPage() {
               <FormField label="模型预设">
                 <select
                   className={selectClass}
-                  value={isPresetAgentLLMModel(form.llm_provider, form.llm_model) ? form.llm_model : "__custom__"}
+                  value={isPresetModel(providerOptions, form.llm_provider, form.llm_model) ? form.llm_model : "__custom__"}
                   onChange={(e) => setForm((f) => ({
                     ...f,
                     llm_model: e.target.value === "__custom__" ? f.llm_model : e.target.value,
@@ -386,10 +395,10 @@ export default function AgentsPage() {
                   onChange={(e) => setEditForm((f) => ({
                     ...f,
                     llm_provider: e.target.value,
-                    llm_model: getDefaultAgentLLMModel(e.target.value),
+                    llm_model: getDefaultModel(providerOptions, e.target.value),
                   }))}
                 >
-                  {agentLLMProviderOptions.map((option) => (
+                  {providerOptions.map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
@@ -397,7 +406,7 @@ export default function AgentsPage() {
               <FormField label="模型预设">
                 <select
                   className={selectClass}
-                  value={isPresetAgentLLMModel(editForm.llm_provider, editForm.llm_model) ? editForm.llm_model : "__custom__"}
+                  value={isPresetModel(providerOptions, editForm.llm_provider, editForm.llm_model) ? editForm.llm_model : "__custom__"}
                   onChange={(e) => setEditForm((f) => ({
                     ...f,
                     llm_model: e.target.value === "__custom__" ? f.llm_model : e.target.value,
@@ -493,7 +502,7 @@ export default function AgentsPage() {
                       )}
                       {agent.agent_type === "llm" && llm.model && (
                         <span className="inline-flex rounded-full bg-sky-50 px-2 py-0.5 text-xs text-sky-700 ring-1 ring-inset ring-sky-200">
-                          {getAgentLLMProviderLabel(llm.provider)} / {llm.model}
+                          {getProviderLabel(providerOptions, llm.provider)} / {llm.model}
                         </span>
                       )}
                       {agent.specialization && agent.specialization !== "general" && (

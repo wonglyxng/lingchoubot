@@ -47,6 +47,7 @@ func main() {
 	reviewRepo := repository.NewReviewReportRepo(db)
 	approvalRepo := repository.NewApprovalRequestRepo(db)
 	toolCallRepo := repository.NewToolCallRepo(db)
+	llmProviderRepo := repository.NewLLMProviderRepo(db)
 
 	// --- services ---
 	eventHub := service.NewEventHub()
@@ -64,6 +65,7 @@ func main() {
 	approvalSvc := service.NewApprovalRequestService(approvalRepo, taskSvc, auditSvc)
 	reviewSvc.SetApprovalService(approvalSvc)
 	toolCallSvc := service.NewToolCallService(toolCallRepo, auditSvc)
+	llmProviderSvc := service.NewLLMProviderService(llmProviderRepo, auditSvc)
 
 	bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer bootstrapCancel()
@@ -100,6 +102,7 @@ func main() {
 	handler.NewApprovalRequestHandler(approvalSvc).Register(mux)
 	handler.NewAuditHandler(auditSvc).Register(mux)
 	handler.NewSSEHandler(eventHub).Register(mux)
+	handler.NewLLMProviderHandler(llmProviderSvc).Register(mux)
 
 	// --- tool gateway ---
 	gw := gateway.NewGateway(toolCallSvc, agentSvc, contractSvc, auditSvc, logger)
@@ -139,7 +142,9 @@ func main() {
 			}
 		}
 
-		runtime.RegisterLLMRunnersWithFallback(reg, defaultClient, roleClients, providerConfigs, logger, cfg.LLM.FallbackEnabled)
+		runtime.RegisterLLMRunnersWithFallback(reg, defaultClient, roleClients, providerConfigs, func(providerKey string) (string, string, bool) {
+			return llmProviderSvc.GetProviderConfig(context.Background(), providerKey)
+		}, logger, cfg.LLM.FallbackEnabled)
 		logger.Info("LLM agent runners registered", "model", cfg.LLM.Model, "base_url", cfg.LLM.BaseURL, "fallback", cfg.LLM.FallbackEnabled)
 	} else {
 		reg.RegisterDefaults()

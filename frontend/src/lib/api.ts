@@ -2,6 +2,7 @@ import type {
   Project, Phase, Agent, Task, Artifact, ArtifactVersion,
   ApprovalRequest, AuditLog, WorkflowRun, ListResponse,
   ReviewReport, TaskContract, TaskAssignment, HandoffSnapshot, ToolCall,
+  LLMProvider, LLMModel,
 } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
@@ -242,5 +243,21 @@ export const api = {
     },
     get: (id: string) => get<WorkflowRun>(`/api/v1/orchestrator/runs/${id}`),
     start: (projectId: string) => post<WorkflowRun>("/api/v1/orchestrator/runs", { project_id: projectId }),
+  },
+
+  llmProviders: {
+    list: (enabledOnly = false) =>
+      get<{ items: LLMProvider[] }>(`/api/v1/llm-providers${enabledOnly ? "?enabled_only=true" : ""}`),
+    get: (id: string) => get<LLMProvider>(`/api/v1/llm-providers/${id}`),
+    create: (data: Partial<LLMProvider>) => post<LLMProvider>("/api/v1/llm-providers", data),
+    update: (id: string, data: Partial<LLMProvider>) => put<LLMProvider>(`/api/v1/llm-providers/${id}`, data),
+    delete: (id: string) => del<null>(`/api/v1/llm-providers/${id}`),
+    createModel: (providerId: string, data: Partial<LLMModel>) =>
+      post<LLMModel>(`/api/v1/llm-providers/${providerId}/models`, data),
+    listModels: (providerId: string) =>
+      get<{ items: LLMModel[] }>(`/api/v1/llm-providers/${providerId}/models`),
+    updateModel: (modelId: string, data: Partial<LLMModel>) =>
+      put<LLMModel>(`/api/v1/llm-models/${modelId}`, data),
+    deleteModel: (modelId: string) => del<null>(`/api/v1/llm-models/${modelId}`),
   },
 };

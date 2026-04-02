@@ -17,6 +17,7 @@ export interface AgentLLMProviderOption {
 export const DEFAULT_AGENT_LLM_PROVIDER = "openai";
 export const DEFAULT_AGENT_LLM_MODEL = "gpt-4.1-mini";
 
+// Hardcoded fallback list — used only when API hasn't returned yet or fails
 export const agentLLMProviderOptions: AgentLLMProviderOption[] = [
   {
     value: "openai",
@@ -140,4 +141,40 @@ export function mergeAgentLLMMetadata(
     delete nextMetadata.llm;
   }
   return nextMetadata;
+}
+
+// --- API-driven helpers ---
+
+import type { LLMProvider } from "./types";
+
+/** Convert API LLMProvider[] to dropdown-friendly AgentLLMProviderOption[] */
+export function toProviderOptions(providers: LLMProvider[]): AgentLLMProviderOption[] {
+  return providers
+    .filter((p) => p.is_enabled)
+    .map((p) => ({
+      value: p.key,
+      label: p.name,
+      models: (p.models || []).map((m) => ({
+        value: m.model_id,
+        label: m.name,
+      })),
+    }));
+}
+
+/** Get provider options from a dynamic list, with getter helpers */
+export function getProviderLabel(options: AgentLLMProviderOption[], provider?: string): string {
+  return options.find((o) => o.value === provider)?.label || provider || "未知提供商";
+}
+
+export function getModelOptions(options: AgentLLMProviderOption[], provider?: string): AgentLLMModelOption[] {
+  return options.find((o) => o.value === provider)?.models || [];
+}
+
+export function getDefaultModel(options: AgentLLMProviderOption[], provider?: string): string {
+  const models = getModelOptions(options, provider);
+  return models[0]?.value || DEFAULT_AGENT_LLM_MODEL;
+}
+
+export function isPresetModel(options: AgentLLMProviderOption[], provider: string, model: string): boolean {
+  return getModelOptions(options, provider).some((m) => m.value === model);
 }

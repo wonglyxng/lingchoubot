@@ -420,7 +420,7 @@ func TestRegisterLLMRunnersWithFallback(t *testing.T) {
 		Model:   "default-model",
 	})
 
-	RegisterLLMRunnersWithFallback(reg, defaultClient, nil, nil, logger, true)
+	RegisterLLMRunnersWithFallback(reg, defaultClient, nil, nil, nil, logger, true)
 
 	// Verify all roles have fallback set
 	for _, role := range []string{"pm", "supervisor", "worker", "reviewer"} {
@@ -514,5 +514,86 @@ func TestLLMRunnerClientForInputRejectsUnknownProvider(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected unknown provider error")
+	}
+}
+
+func TestLLMRunnerClientForInputDynamicLookup(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Create runner with a dynamic lookup that returns custom provider config
+	runner := NewLLMRunner(NewLLMClient(LLMClientConfig{
+		BaseURL: "https://api.openai.com/v1",
+		APIKey:  "openai-key",
+		Model:   "gpt-4.1-mini",
+	}), "worker", "backend", logger).WithProviderLookup(func(key string) (string, string, bool) {
+		if key == "custom-llm" {
+			return "https://custom.example.com/v1", "custom-key", true
+		}
+		return "", "", false
+	})
+
+	// Test: dynamic lookup resolves known provider
+	client, err := runner.clientForInput(&AgentTaskInput{
+		AgentLLM: &AgentLLMConfig{
+			Provider: "custom-llm",
+			Model:    "custom-model",
+		},
+	})
+	if err != nil {
+		t.Fatalf("clientForInput returned error: %v", err)
+	}
+	if client.cfg.BaseURL != "https://custom.example.com/v1" {
+		t.Errorf("base URL = %s, want custom base URL", client.cfg.BaseURL)
+	}
+	if client.cfg.APIKey != "custom-key" {
+		t.Errorf("api key = %s, want custom-key", client.cfg.APIKey)
+	}
+	if client.cfg.Model != "custom-model" {
+		t.Errorf("model = %s, want custom-model", client.cfg.Model)
+	}
+
+	// Test: dynamic lookup returns false → falls back to static map error
+	_, err = runner.clientForInput(&AgentTaskInput{
+		AgentLLM: &AgentLLMConfig{
+			Provider: "missing-provider",
+			Model:    "any-model",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for provider not in lookup or static map")
+	}
+}
+
+func TestLLMRunnerClientForInputDynamicLookupPriority(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Runner has BOTH static map and dynamic lookup for the same provider
+	runner := NewLLMRunner(NewLLMClient(LLMClientConfig{
+		BaseURL: "https://api.openai.com/v1",
+		APIKey:  "openai-key",
+		Model:   "gpt-4.1-mini",
+	}), "worker", "backend", logger).
+		WithProviderConfigs(map[string]LLMClientConfig{
+			"dual": {BaseURL: "https://static.example.com/v1", APIKey: "static-key"},
+		}).
+		WithProviderLookup(func(key string) (string, string, bool) {
+			if key == "dual" {
+				return "https://dynamic.example.com/v1", "dynamic-key", true
+			}
+			return "", "", false
+		})
+
+	// Dynamic lookup should take priority over static map
+	client, err := runner.clientForInput(&AgentTaskInput{
+		AgentLLM: &AgentLLMConfig{Provider: "dual", Model: "test-model"},
+	})
+	if err != nil {
+		t.Fatalf("clientForInput returned error: %v", err)
+	}
+	if client.cfg.BaseURL != "https://dynamic.example.com/v1" {
+		t.Errorf("expected dynamic URL, got %s", client.cfg.BaseURL)
+	}
+	if client.cfg.APIKey != "dynamic-key" {
+		t.Errorf("expected dynamic key, got %s", client.cfg.APIKey)
 	}
 }

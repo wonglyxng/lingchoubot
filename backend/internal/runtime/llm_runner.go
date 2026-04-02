@@ -14,8 +14,13 @@ type LLMAgentRunner struct {
 	spec            string
 	logger          *slog.Logger
 	providerConfigs map[string]LLMClientConfig
-	fallback        AgentRunner // optional fallback runner for degradation
+	providerLookup  ProviderConfigLookup // dynamic lookup (e.g. DB-backed), tried before static map
+	fallback        AgentRunner          // optional fallback runner for degradation
 }
+
+// ProviderConfigLookup resolves a provider's connection config dynamically.
+// Returns (baseURL, apiKey, found).
+type ProviderConfigLookup func(providerKey string) (baseURL, apiKey string, found bool)
 
 // LastCallMeta stores metadata from the most recent LLM call (for audit/testing).
 // Only accessed from the goroutine that called Execute; not thread-safe by design.
@@ -47,6 +52,13 @@ func (r *LLMAgentRunner) WithProviderConfigs(configs map[string]LLMClientConfig)
 	for key, cfg := range configs {
 		r.providerConfigs[key] = cfg
 	}
+	return r
+}
+
+// WithProviderLookup sets a dynamic lookup function for provider configs.
+// When set, this is tried before the static providerConfigs map.
+func (r *LLMAgentRunner) WithProviderLookup(fn ProviderConfigLookup) *LLMAgentRunner {
+	r.providerLookup = fn
 	return r
 }
 
@@ -209,15 +221,34 @@ func (r *LLMAgentRunner) clientForInput(input *AgentTaskInput) (*LLMClient, erro
 
 	cfg := r.client.cfg
 	if input.AgentLLM.Provider != "" {
-		providerCfg, ok := r.providerConfigs[input.AgentLLM.Provider]
-		if !ok {
-			return nil, fmt.Errorf("unsupported llm provider %q", input.AgentLLM.Provider)
+		// 1. Try dynamic lookup (DB-backed) first
+		if r.providerLookup != nil {
+			if baseURL, apiKey, found := r.providerLookup(input.AgentLLM.Provider); found {
+				cfg.BaseURL = baseURL
+				cfg.APIKey = apiKey
+			} else {
+				// 2. Fall back to static map (env-var based)
+				providerCfg, ok := r.providerConfigs[input.AgentLLM.Provider]
+				if !ok {
+					return nil, fmt.Errorf("unsupported llm provider %q", input.AgentLLM.Provider)
+				}
+				if providerCfg.BaseURL == "" {
+					return nil, fmt.Errorf("llm provider %q missing base_url", input.AgentLLM.Provider)
+				}
+				cfg.BaseURL = providerCfg.BaseURL
+				cfg.APIKey = providerCfg.APIKey
+			}
+		} else {
+			providerCfg, ok := r.providerConfigs[input.AgentLLM.Provider]
+			if !ok {
+				return nil, fmt.Errorf("unsupported llm provider %q", input.AgentLLM.Provider)
+			}
+			if providerCfg.BaseURL == "" {
+				return nil, fmt.Errorf("llm provider %q missing base_url", input.AgentLLM.Provider)
+			}
+			cfg.BaseURL = providerCfg.BaseURL
+			cfg.APIKey = providerCfg.APIKey
 		}
-		if providerCfg.BaseURL == "" {
-			return nil, fmt.Errorf("llm provider %q missing base_url", input.AgentLLM.Provider)
-		}
-		cfg.BaseURL = providerCfg.BaseURL
-		cfg.APIKey = providerCfg.APIKey
 	}
 	if input.AgentLLM.Model != "" {
 		cfg.Model = input.AgentLLM.Model
@@ -230,11 +261,11 @@ func (r *LLMAgentRunner) clientForInput(input *AgentTaskInput) (*LLMClient, erro
 // fall back to the global defaults provided by defaultClient.
 // When enableFallback is true, each LLM runner is configured with a mock fallback.
 func RegisterLLMRunners(reg *Registry, defaultClient *LLMClient, roleClients map[string]*LLMClient, providerConfigs map[string]LLMClientConfig, logger *slog.Logger) {
-	RegisterLLMRunnersWithFallback(reg, defaultClient, roleClients, providerConfigs, logger, false)
+	RegisterLLMRunnersWithFallback(reg, defaultClient, roleClients, providerConfigs, nil, logger, false)
 }
 
 // RegisterLLMRunnersWithFallback registers LLM runners with optional mock fallback.
-func RegisterLLMRunnersWithFallback(reg *Registry, defaultClient *LLMClient, roleClients map[string]*LLMClient, providerConfigs map[string]LLMClientConfig, logger *slog.Logger, enableFallback bool) {
+func RegisterLLMRunnersWithFallback(reg *Registry, defaultClient *LLMClient, roleClients map[string]*LLMClient, providerConfigs map[string]LLMClientConfig, providerLookup ProviderConfigLookup, logger *slog.Logger, enableFallback bool) {
 	getClient := func(role string) *LLMClient {
 		if c, ok := roleClients[role]; ok {
 			return c
@@ -242,10 +273,10 @@ func RegisterLLMRunnersWithFallback(reg *Registry, defaultClient *LLMClient, rol
 		return defaultClient
 	}
 
-	pmRunner := NewLLMRunner(getClient("pm"), "pm", "", logger).WithProviderConfigs(providerConfigs)
-	supRunner := NewLLMRunner(getClient("supervisor"), "supervisor", "", logger).WithProviderConfigs(providerConfigs)
-	wrkRunner := NewLLMRunner(getClient("worker"), "worker", "general", logger).WithProviderConfigs(providerConfigs)
-	revRunner := NewLLMRunner(getClient("reviewer"), "reviewer", "", logger).WithProviderConfigs(providerConfigs)
+	pmRunner := NewLLMRunner(getClient("pm"), "pm", "", logger).WithProviderConfigs(providerConfigs).WithProviderLookup(providerLookup)
+	supRunner := NewLLMRunner(getClient("supervisor"), "supervisor", "", logger).WithProviderConfigs(providerConfigs).WithProviderLookup(providerLookup)
+	wrkRunner := NewLLMRunner(getClient("worker"), "worker", "general", logger).WithProviderConfigs(providerConfigs).WithProviderLookup(providerLookup)
+	revRunner := NewLLMRunner(getClient("reviewer"), "reviewer", "", logger).WithProviderConfigs(providerConfigs).WithProviderLookup(providerLookup)
 
 	if enableFallback {
 		pmRunner.WithFallback(&MockPMAgent{})
@@ -261,9 +292,9 @@ func RegisterLLMRunnersWithFallback(reg *Registry, defaultClient *LLMClient, rol
 
 	// Specialized workers share the worker client
 	wc := getClient("worker")
-	bw := NewLLMRunner(wc, "worker", "backend", logger).WithProviderConfigs(providerConfigs)
-	fw := NewLLMRunner(wc, "worker", "frontend", logger).WithProviderConfigs(providerConfigs)
-	qw := NewLLMRunner(wc, "worker", "qa", logger).WithProviderConfigs(providerConfigs)
+	bw := NewLLMRunner(wc, "worker", "backend", logger).WithProviderConfigs(providerConfigs).WithProviderLookup(providerLookup)
+	fw := NewLLMRunner(wc, "worker", "frontend", logger).WithProviderConfigs(providerConfigs).WithProviderLookup(providerLookup)
+	qw := NewLLMRunner(wc, "worker", "qa", logger).WithProviderConfigs(providerConfigs).WithProviderLookup(providerLookup)
 	if enableFallback {
 		bw.WithFallback(&MockBackendWorkerAgent{})
 		fw.WithFallback(&MockFrontendWorkerAgent{})
