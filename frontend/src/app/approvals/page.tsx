@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import type { ApprovalRequest } from "@/lib/types";
 import { StatusBadge } from "@/components/StatusBadge";
 import { asRecord, asStringArray, formatTime, getApprovalStatus, metadataNumber, relativeTime, truncateText } from "@/lib/utils";
-import { useEventStream, type SSEEvent } from "@/lib/useEventStream";
+import { useEventStream } from "@/lib/useEventStream";
 
 type FilterTab = "all" | "pending" | "approved" | "rejected";
 
@@ -73,7 +73,7 @@ export default function ApprovalsPage() {
 
   // SSE real-time updates
   const topics = useMemo(() => ["approval"], []);
-  const onEvent = useCallback((_evt: SSEEvent) => {
+  const onEvent = useCallback(() => {
     fetchList().catch(() => {});
   }, [fetchList]);
 
