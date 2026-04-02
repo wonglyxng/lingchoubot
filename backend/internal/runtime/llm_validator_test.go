@@ -136,8 +136,8 @@ func TestValidateOutput_Reviewer_Valid(t *testing.T) {
 		Status:  OutputStatusSuccess,
 		Summary: "评审完成",
 		Reviews: []ReviewAction{{
-			Verdict:  "approved",
-			Findings: []string{"good structure", "content is relevant"},
+			Verdict:         "approved",
+			Findings:        []string{"good structure", "content is relevant"},
 			Recommendations: []string{"keep adding focused evidence"},
 		}},
 	}
@@ -151,8 +151,8 @@ func TestValidateOutput_Reviewer_InvalidVerdict(t *testing.T) {
 		Status:  OutputStatusSuccess,
 		Summary: "评审完成",
 		Reviews: []ReviewAction{{
-			Verdict:  "rejected",
-			Findings: []string{"bad", "still bad"},
+			Verdict:         "rejected",
+			Findings:        []string{"bad", "still bad"},
 			Recommendations: []string{"fix it"},
 		}},
 	}
@@ -220,6 +220,48 @@ func TestValidateOutputForInput_AnalysisTaskRejectsTestReport(t *testing.T) {
 	}
 	if err := ValidateOutputForInput("worker", "general", input, output); err == nil {
 		t.Fatal("expected analysis task validation failure")
+	}
+}
+
+func TestValidateOutputForInput_AnalysisTaskWithValidationLanguageAllowsPRD(t *testing.T) {
+	input := &AgentTaskInput{
+		Project: &ProjectCtx{Name: "Artifact修复验证项目"},
+		Task: &TaskCtx{
+			Title:       "需求梳理与PRD编写",
+			Description: "详细分析artifact写入修复和SSE修复的具体验证需求，明确验证场景、成功标准和验收条件，编写项目需求文档",
+		},
+	}
+	output := &AgentTaskOutput{
+		Status:  OutputStatusNeedsReview,
+		Summary: "已输出需求文档",
+		Artifacts: []ArtifactAction{{
+			Name:         "artifact修复验证-prd.md",
+			ArtifactType: "prd",
+			ContentType:  "text/markdown",
+			Content:      "# Artifact修复验证项目需求文档\n\n任务：需求梳理与PRD编写\n\n目标：明确验证场景、成功标准和验收条件。",
+		}},
+	}
+	if err := ValidateOutputForInput("worker", "qa", input, output); err != nil {
+		t.Fatalf("expected analysis-style PRD task to pass validation, got: %v", err)
+	}
+}
+
+func TestValidateOutputForInput_VerificationTaskStillRequiresTestReport(t *testing.T) {
+	input := &AgentTaskInput{
+		Task: &TaskCtx{Title: "SSE修复验证", Description: "验证事件推送稳定性与错误处理机制"},
+	}
+	output := &AgentTaskOutput{
+		Status:  OutputStatusNeedsReview,
+		Summary: "done",
+		Artifacts: []ArtifactAction{{
+			Name:         "verification-notes.md",
+			ArtifactType: "other",
+			ContentType:  "text/markdown",
+			Content:      "仅记录观察，没有测试报告。",
+		}},
+	}
+	if err := ValidateOutputForInput("worker", "qa", input, output); err == nil {
+		t.Fatal("expected verification task to require test_report artifact")
 	}
 }
 

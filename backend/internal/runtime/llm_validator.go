@@ -17,7 +17,7 @@ var validArtifactTypes = map[string]struct{}{
 	"other":           {},
 }
 
-var analysisTaskKeywords = []string{"可行性", "需求", "分析", "评估", "调研", "方案", "规划", "prd"}
+var analysisTaskKeywords = []string{"可行性", "需求", "分析", "评估", "调研", "方案", "规划", "计划", "梳理", "编写", "文档", "设计", "prd"}
 var testingTaskKeywords = []string{"测试", "验证", "回归", "qa", "test"}
 var placeholderMarkers = []string{"待补充", "todo", "tbd", "占位", "mock qa worker agent", "mock worker agent", "mock reviewer agent", "由 doc_generator 工具自动生成"}
 
@@ -193,7 +193,7 @@ func validateWorkerOutputAgainstInput(input *AgentTaskInput, output *AgentTaskOu
 	var failures []string
 	taskText := input.Task.Title + " " + input.Task.Description
 	analysisTask := containsAnyFold(taskText, analysisTaskKeywords)
-	testingTask := containsAnyFold(taskText, testingTaskKeywords)
+	testingTask := !analysisTask && containsAnyFold(taskText, testingTaskKeywords)
 	hasProjectBinding := func(content string) bool {
 		if strings.TrimSpace(content) == "" {
 			return false
