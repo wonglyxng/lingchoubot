@@ -5,7 +5,58 @@ import { Bot, ChevronRight, Plus, Pencil, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Agent } from "@/lib/types";
 import { getAgentRole, getAgentType, getAgentSpec } from "@/lib/utils";
+import {
+  agentLLMProviderOptions,
+  DEFAULT_AGENT_LLM_PROVIDER,
+  getAgentLLMModelOptions,
+  getAgentLLMProviderLabel,
+  getDefaultAgentLLMModel,
+  isPresetAgentLLMModel,
+  mergeAgentLLMMetadata,
+  readAgentLLMConfig,
+} from "@/lib/agent-llm";
 import { FormModal, FormField, inputClass, textareaClass, selectClass } from "@/components/FormModal";
+
+type AgentFormState = {
+  name: string;
+  role: string;
+  description: string;
+  agent_type: string;
+  specialization: string;
+  reports_to: string;
+  llm_provider: string;
+  llm_model: string;
+  metadata: Record<string, unknown>;
+};
+
+function createEmptyAgentForm(): AgentFormState {
+  return {
+    name: "",
+    role: "worker",
+    description: "",
+    agent_type: "llm",
+    specialization: "general",
+    reports_to: "",
+    llm_provider: DEFAULT_AGENT_LLM_PROVIDER,
+    llm_model: getDefaultAgentLLMModel(DEFAULT_AGENT_LLM_PROVIDER),
+    metadata: {},
+  };
+}
+
+function buildAgentPayload(form: AgentFormState) {
+  return {
+    name: form.name.trim(),
+    role: form.role,
+    description: form.description.trim(),
+    agent_type: form.agent_type,
+    specialization: form.specialization,
+    reports_to: form.reports_to || undefined,
+    metadata: mergeAgentLLMMetadata(form.metadata, form.agent_type, {
+      provider: form.llm_provider,
+      model: form.llm_model.trim(),
+    }),
+  };
+}
 
 function roleColorClass(role: string): string {
   switch (role) {
@@ -94,15 +145,9 @@ export default function AgentsPage() {
   const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [form, setForm] = useState({
-    name: "", role: "worker", description: "",
-    agent_type: "mock", specialization: "general", reports_to: "",
-  });
+  const [form, setForm] = useState<AgentFormState>(createEmptyAgentForm());
   const [editTarget, setEditTarget] = useState<Agent | null>(null);
-  const [editForm, setEditForm] = useState({
-    name: "", role: "worker", description: "",
-    agent_type: "mock", specialization: "general", reports_to: "",
-  });
+  const [editForm, setEditForm] = useState<AgentFormState>(createEmptyAgentForm());
 
   const load = useCallback(() => {
     setLoading(true);
@@ -120,16 +165,9 @@ export default function AgentsPage() {
     if (!form.name.trim()) return;
     setSubmitting(true);
     try {
-      await api.agents.create({
-        name: form.name.trim(),
-        role: form.role,
-        description: form.description.trim(),
-        agent_type: form.agent_type,
-        specialization: form.specialization,
-        reports_to: form.reports_to || undefined,
-      });
+      await api.agents.create(buildAgentPayload(form));
       setShowCreate(false);
-      setForm({ name: "", role: "worker", description: "", agent_type: "mock", specialization: "general", reports_to: "" });
+      setForm(createEmptyAgentForm());
       load();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "创建失败";
@@ -140,11 +178,18 @@ export default function AgentsPage() {
   };
 
   const openEdit = (a: Agent) => {
+    const llm = readAgentLLMConfig(a.metadata);
     setEditTarget(a);
     setEditForm({
-      name: a.name, role: a.role, description: a.description,
-      agent_type: a.agent_type, specialization: a.specialization,
+      name: a.name,
+      role: a.role,
+      description: a.description,
+      agent_type: a.agent_type || "llm",
+      specialization: a.specialization,
       reports_to: a.reports_to || "",
+      llm_provider: llm.provider,
+      llm_model: llm.model,
+      metadata: a.metadata || {},
     });
   };
 
@@ -152,14 +197,7 @@ export default function AgentsPage() {
     if (!editTarget || !editForm.name.trim()) return;
     setSubmitting(true);
     try {
-      await api.agents.update(editTarget.id, {
-        name: editForm.name.trim(),
-        role: editForm.role,
-        description: editForm.description.trim(),
-        agent_type: editForm.agent_type,
-        specialization: editForm.specialization,
-        reports_to: editForm.reports_to || undefined,
-      });
+      await api.agents.update(editTarget.id, buildAgentPayload(editForm));
       setEditTarget(null);
       load();
     } catch (e: unknown) {
@@ -180,6 +218,8 @@ export default function AgentsPage() {
   };
 
   const rows = useMemo(() => buildDisplayOrder(items), [items]);
+  const createModelOptions = getAgentLLMModelOptions(form.llm_provider);
+  const editModelOptions = getAgentLLMModelOptions(editForm.llm_provider);
 
   return (
     <div className="min-h-full bg-gray-50 p-6">
@@ -231,12 +271,57 @@ export default function AgentsPage() {
           </FormField>
           <FormField label="类型">
             <select className={selectClass} value={form.agent_type} onChange={(e) => setForm((f) => ({ ...f, agent_type: e.target.value }))}>
-              <option value="mock">模拟</option>
               <option value="llm">LLM</option>
               <option value="human">人工</option>
             </select>
           </FormField>
         </div>
+        {form.agent_type === "llm" && (
+          <>
+            <div className="grid grid-cols-2 gap-4">
+              <FormField label="LLM 提供商" required>
+                <select
+                  className={selectClass}
+                  value={form.llm_provider}
+                  onChange={(e) => setForm((f) => ({
+                    ...f,
+                    llm_provider: e.target.value,
+                    llm_model: getDefaultAgentLLMModel(e.target.value),
+                  }))}
+                >
+                  {agentLLMProviderOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </FormField>
+              <FormField label="模型预设">
+                <select
+                  className={selectClass}
+                  value={isPresetAgentLLMModel(form.llm_provider, form.llm_model) ? form.llm_model : "__custom__"}
+                  onChange={(e) => setForm((f) => ({
+                    ...f,
+                    llm_model: e.target.value === "__custom__" ? f.llm_model : e.target.value,
+                  }))}
+                >
+                  {createModelOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                  <option value="__custom__">自定义模型</option>
+                </select>
+              </FormField>
+            </div>
+            <FormField label="模型 ID" required>
+              <input
+                className={inputClass}
+                value={form.llm_model}
+                onChange={(e) => setForm((f) => ({ ...f, llm_model: e.target.value }))}
+                placeholder="例如：gpt-4.1-mini"
+                maxLength={120}
+                required
+              />
+            </FormField>
+          </>
+        )}
         <FormField label="专长">
           <select className={selectClass} value={form.specialization} onChange={(e) => setForm((f) => ({ ...f, specialization: e.target.value }))}>
             <option value="general">通用</option>
@@ -286,10 +371,56 @@ export default function AgentsPage() {
           </FormField>
           <FormField label="类型">
             <select className={selectClass} value={editForm.agent_type} onChange={(e) => setEditForm((f) => ({ ...f, agent_type: e.target.value }))}>
-              <option value="mock">模拟</option><option value="llm">LLM</option><option value="human">人工</option>
+              <option value="llm">LLM</option><option value="human">人工</option>
+              {editForm.agent_type === "mock" && <option value="mock">模拟（兼容旧数据）</option>}
             </select>
           </FormField>
         </div>
+        {editForm.agent_type === "llm" && (
+          <>
+            <div className="grid grid-cols-2 gap-4">
+              <FormField label="LLM 提供商" required>
+                <select
+                  className={selectClass}
+                  value={editForm.llm_provider}
+                  onChange={(e) => setEditForm((f) => ({
+                    ...f,
+                    llm_provider: e.target.value,
+                    llm_model: getDefaultAgentLLMModel(e.target.value),
+                  }))}
+                >
+                  {agentLLMProviderOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </FormField>
+              <FormField label="模型预设">
+                <select
+                  className={selectClass}
+                  value={isPresetAgentLLMModel(editForm.llm_provider, editForm.llm_model) ? editForm.llm_model : "__custom__"}
+                  onChange={(e) => setEditForm((f) => ({
+                    ...f,
+                    llm_model: e.target.value === "__custom__" ? f.llm_model : e.target.value,
+                  }))}
+                >
+                  {editModelOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                  <option value="__custom__">自定义模型</option>
+                </select>
+              </FormField>
+            </div>
+            <FormField label="模型 ID" required>
+              <input
+                className={inputClass}
+                value={editForm.llm_model}
+                onChange={(e) => setEditForm((f) => ({ ...f, llm_model: e.target.value }))}
+                maxLength={120}
+                required
+              />
+            </FormField>
+          </>
+        )}
         <FormField label="专长">
           <select className={selectClass} value={editForm.specialization} onChange={(e) => setEditForm((f) => ({ ...f, specialization: e.target.value }))}>
             <option value="general">通用</option><option value="backend">后端</option><option value="frontend">前端</option>
@@ -330,8 +461,9 @@ export default function AgentsPage() {
       {!loading && !error && items.length > 0 && (
         <div className="rounded-lg border border-gray-200 bg-white p-4">
           <ul className="space-y-1">
-            {rows.map(({ agent, depth }) => (
-              <li key={agent.id}>
+            {rows.map(({ agent, depth }) => {
+              const llm = readAgentLLMConfig(agent.metadata);
+              return <li key={agent.id}>
                 <div
                   className="flex gap-2 rounded-md border border-gray-200 bg-gray-50/50 py-2.5 pr-3"
                   style={{ paddingLeft: `${12 + depth * 20}px` }}
@@ -359,6 +491,11 @@ export default function AgentsPage() {
                           {getAgentType(agent.agent_type)}
                         </span>
                       )}
+                      {agent.agent_type === "llm" && llm.model && (
+                        <span className="inline-flex rounded-full bg-sky-50 px-2 py-0.5 text-xs text-sky-700 ring-1 ring-inset ring-sky-200">
+                          {getAgentLLMProviderLabel(llm.provider)} / {llm.model}
+                        </span>
+                      )}
                       {agent.specialization && agent.specialization !== "general" && (
                         <span className="inline-flex rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-600 ring-1 ring-inset ring-indigo-200">
                           {getAgentSpec(agent.specialization)}
@@ -383,8 +520,8 @@ export default function AgentsPage() {
                     ) : null}
                   </div>
                 </div>
-              </li>
-            ))}
+              </li>;
+            })}
           </ul>
         </div>
       )}

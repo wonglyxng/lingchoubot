@@ -175,7 +175,7 @@ func TestRegisterLLMRunners(t *testing.T) {
 		"pm": pmClient,
 	}
 
-	RegisterLLMRunners(reg, defaultClient, roleClients, logger)
+	RegisterLLMRunners(reg, defaultClient, roleClients, nil, logger)
 
 	// Verify all roles are registered
 	roles := []string{"pm", "supervisor", "worker", "reviewer"}
@@ -420,7 +420,7 @@ func TestRegisterLLMRunnersWithFallback(t *testing.T) {
 		Model:   "default-model",
 	})
 
-	RegisterLLMRunnersWithFallback(reg, defaultClient, nil, logger, true)
+	RegisterLLMRunnersWithFallback(reg, defaultClient, nil, nil, logger, true)
 
 	// Verify all roles have fallback set
 	for _, role := range []string{"pm", "supervisor", "worker", "reviewer"} {
@@ -462,5 +462,57 @@ func TestMetaHelpers(t *testing.T) {
 	}
 	if metaTotalTokens(m) != 500 {
 		t.Errorf("expected 500, got %d", metaTotalTokens(m))
+	}
+}
+
+func TestLLMRunnerClientForInputUsesAgentOverride(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	runner := NewLLMRunner(NewLLMClient(LLMClientConfig{
+		BaseURL: "https://api.openai.com/v1",
+		APIKey:  "openai-key",
+		Model:   "gpt-4.1-mini",
+	}), "worker", "backend", logger).WithProviderConfigs(map[string]LLMClientConfig{
+		"deepseek": {
+			BaseURL: "https://api.deepseek.com/v1",
+			APIKey:  "deepseek-key",
+		},
+	})
+
+	client, err := runner.clientForInput(&AgentTaskInput{
+		AgentLLM: &AgentLLMConfig{
+			Provider: "deepseek",
+			Model:    "deepseek-chat",
+		},
+	})
+	if err != nil {
+		t.Fatalf("clientForInput returned error: %v", err)
+	}
+	if client.cfg.BaseURL != "https://api.deepseek.com/v1" {
+		t.Fatalf("base URL = %s, want deepseek base URL", client.cfg.BaseURL)
+	}
+	if client.cfg.APIKey != "deepseek-key" {
+		t.Fatalf("api key = %s, want deepseek-key", client.cfg.APIKey)
+	}
+	if client.cfg.Model != "deepseek-chat" {
+		t.Fatalf("model = %s, want deepseek-chat", client.cfg.Model)
+	}
+}
+
+func TestLLMRunnerClientForInputRejectsUnknownProvider(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	runner := NewLLMRunner(NewLLMClient(LLMClientConfig{
+		BaseURL: "https://api.openai.com/v1",
+		APIKey:  "openai-key",
+		Model:   "gpt-4.1-mini",
+	}), "worker", "backend", logger)
+
+	_, err := runner.clientForInput(&AgentTaskInput{
+		AgentLLM: &AgentLLMConfig{
+			Provider: "unknown-provider",
+			Model:    "some-model",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected unknown provider error")
 	}
 }

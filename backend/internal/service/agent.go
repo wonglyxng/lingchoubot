@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/lib/pq"
 	"github.com/lingchou/lingchoubot/backend/internal/model"
@@ -52,7 +53,12 @@ func normalizeAgentForWrite(a *model.Agent) error {
 		a.Status = model.AgentStatusActive
 	}
 	if a.AgentType == "" {
-		a.AgentType = model.AgentTypeMock
+		a.AgentType = model.AgentTypeLLM
+	}
+	switch a.AgentType {
+	case model.AgentTypeLLM, model.AgentTypeHuman, model.AgentTypeMock:
+	default:
+		return fmt.Errorf("unsupported agent type: %s", a.AgentType)
 	}
 	if a.Specialization == "" {
 		a.Specialization = model.AgentSpecGeneral
@@ -74,6 +80,9 @@ func normalizeAgentForWrite(a *model.Agent) error {
 	}
 	if len(a.Metadata) == 0 {
 		a.Metadata = model.JSON("{}")
+	}
+	if err := normalizeAgentLLMMetadata(a); err != nil {
+		return err
 	}
 	return nil
 }
@@ -178,4 +187,36 @@ func isAgentRoleCodeUniqueViolation(err error) bool {
 		return false
 	}
 	return string(pqErr.Code) == "23505" && pqErr.Constraint == agentRoleCodeUniqueIndex
+}
+
+func normalizeAgentLLMMetadata(a *model.Agent) error {
+	if a.AgentType != model.AgentTypeLLM {
+		return a.SetLLMConfig(nil)
+	}
+
+	cfg, err := a.GetLLMConfig()
+	if err != nil {
+		return fmt.Errorf("invalid agent metadata: %w", err)
+	}
+	if cfg == nil {
+		cfg = &model.AgentLLMConfig{}
+	}
+
+	provider := model.AgentLLMProvider(strings.TrimSpace(string(cfg.Provider)))
+	if provider == "" {
+		provider = model.DefaultAgentLLMProvider
+	}
+	if !model.IsSupportedAgentLLMProvider(provider) {
+		return fmt.Errorf("unsupported llm provider: %s", provider)
+	}
+
+	modelName := strings.TrimSpace(cfg.Model)
+	if modelName == "" {
+		modelName = model.DefaultAgentLLMModel
+	}
+
+	return a.SetLLMConfig(&model.AgentLLMConfig{
+		Provider: provider,
+		Model:    modelName,
+	})
 }

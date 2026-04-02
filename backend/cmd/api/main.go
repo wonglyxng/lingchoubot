@@ -110,7 +110,7 @@ func main() {
 	// --- agent runtime & orchestrator ---
 	reg := runtime.NewRegistry()
 
-	if cfg.LLM.Enabled && cfg.LLM.APIKey != "" {
+	if cfg.LLM.Enabled {
 		defaultClient := runtime.NewLLMClient(runtime.LLMClientConfig{
 			BaseURL: cfg.LLM.BaseURL,
 			APIKey:  cfg.LLM.APIKey,
@@ -131,7 +131,15 @@ func main() {
 			}
 		}
 
-		runtime.RegisterLLMRunnersWithFallback(reg, defaultClient, roleClients, logger, cfg.LLM.FallbackEnabled)
+		providerConfigs := make(map[string]runtime.LLMClientConfig, len(cfg.LLM.Providers))
+		for provider, providerCfg := range cfg.LLM.Providers {
+			providerConfigs[provider] = runtime.LLMClientConfig{
+				BaseURL: providerCfg.BaseURL,
+				APIKey:  providerCfg.APIKey,
+			}
+		}
+
+		runtime.RegisterLLMRunnersWithFallback(reg, defaultClient, roleClients, providerConfigs, logger, cfg.LLM.FallbackEnabled)
 		logger.Info("LLM agent runners registered", "model", cfg.LLM.Model, "base_url", cfg.LLM.BaseURL, "fallback", cfg.LLM.FallbackEnabled)
 	} else {
 		reg.RegisterDefaults()

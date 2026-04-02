@@ -164,6 +164,9 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.LLM.Model != "gpt-4o-mini" {
 		t.Errorf("expected default LLM model gpt-4o-mini, got %s", cfg.LLM.Model)
 	}
+	if cfg.LLM.Providers["openai"].BaseURL != "https://api.openai.com/v1" {
+		t.Errorf("expected default OpenAI base URL, got %s", cfg.LLM.Providers["openai"].BaseURL)
+	}
 	if cfg.Temporal.Enabled {
 		t.Error("Temporal should be disabled by default")
 	}
@@ -319,5 +322,35 @@ func TestLoadLLMConfig_RoleOverrides(t *testing.T) {
 	baseURL, apiKey, model = cfg.ResolveForRole("supervisor")
 	if baseURL != "http://global.com/v1" || apiKey != "global-key" || model != "sup-model" {
 		t.Errorf("supervisor resolve unexpected: %s, %s, %s", baseURL, apiKey, model)
+	}
+}
+
+func TestLoadLLMConfig_ProviderFallbackFromGlobal(t *testing.T) {
+	envs := map[string]string{
+		"LLM_BASE_URL": "https://api.deepseek.com/v1",
+		"LLM_API_KEY":  "deepseek-global-key",
+	}
+
+	saved := make(map[string]string)
+	for k, v := range envs {
+		saved[k] = os.Getenv(k)
+		os.Setenv(k, v)
+	}
+	defer func() {
+		for k, v := range saved {
+			if v != "" {
+				os.Setenv(k, v)
+			} else {
+				os.Unsetenv(k)
+			}
+		}
+	}()
+
+	cfg := loadLLMConfig()
+	if cfg.Providers["deepseek"].APIKey != "deepseek-global-key" {
+		t.Fatalf("expected deepseek provider to inherit global api key, got %s", cfg.Providers["deepseek"].APIKey)
+	}
+	if cfg.Providers["openai"].APIKey != "" {
+		t.Fatalf("expected openai provider api key to remain empty when global base URL is deepseek, got %s", cfg.Providers["openai"].APIKey)
 	}
 }

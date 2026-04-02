@@ -72,6 +72,23 @@ npm install
 npm run dev
 ```
 
+## LLM Agent 配置
+
+系统现在默认将新建 Agent 视为 LLM Agent。控制台创建 Agent 时不再提供 mock 选项，而是直接选择 Provider 与模型；后端仍兼容历史 mock 记录，避免旧数据失效。
+
+当前内置 Provider 预设包括：OpenAI、DeepSeek、Qwen、Moonshot、Zhipu、SiliconFlow、OpenRouter、Ollama。对应连接信息通过 `.env` 配置，例如：
+
+```bash
+LLM_ENABLED=true
+LLM_FALLBACK_ENABLED=false
+
+LLM_OPENAI_API_KEY=sk-...
+LLM_DEEPSEEK_API_KEY=sk-...
+LLM_OLLAMA_BASE_URL=http://localhost:11434/v1
+```
+
+当 Agent 被配置为 LLM 类型时，其 `metadata.llm.provider` 与 `metadata.llm.model` 会在运行时覆盖默认角色模型配置。若某个 Provider 没有单独填写 Base URL，则使用系统内置的 OpenAI 兼容地址模板。
+
 ## 项目结构
 
 当前主要结构概览如下：

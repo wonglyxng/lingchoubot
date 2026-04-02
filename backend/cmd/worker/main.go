@@ -80,7 +80,7 @@ func main() {
 	// --- agent runtime ---
 	reg := runtime.NewRegistry()
 
-	if cfg.LLM.Enabled && cfg.LLM.APIKey != "" {
+	if cfg.LLM.Enabled {
 		defaultClient := runtime.NewLLMClient(runtime.LLMClientConfig{
 			BaseURL: cfg.LLM.BaseURL,
 			APIKey:  cfg.LLM.APIKey,
@@ -100,8 +100,16 @@ func main() {
 			}
 		}
 
-		runtime.RegisterLLMRunners(reg, defaultClient, roleClients, logger)
-		logger.Info("LLM agent runners registered", "model", cfg.LLM.Model)
+		providerConfigs := make(map[string]runtime.LLMClientConfig, len(cfg.LLM.Providers))
+		for provider, providerCfg := range cfg.LLM.Providers {
+			providerConfigs[provider] = runtime.LLMClientConfig{
+				BaseURL: providerCfg.BaseURL,
+				APIKey:  providerCfg.APIKey,
+			}
+		}
+
+		runtime.RegisterLLMRunners(reg, defaultClient, roleClients, providerConfigs, logger)
+		logger.Info("LLM agent runners registered", "model", cfg.LLM.Model, "base_url", cfg.LLM.BaseURL)
 	} else {
 		reg.RegisterDefaults()
 		logger.Info("mock agent runners registered")

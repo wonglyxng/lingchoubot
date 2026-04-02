@@ -22,6 +22,12 @@ type LLMConfig struct {
 	APIKey          string
 	Model           string
 	Roles           map[string]LLMRoleConfig // 按角色覆盖，key 为 "pm"/"supervisor"/"worker"/"reviewer"
+	Providers       map[string]LLMProviderConfig
+}
+
+type LLMProviderConfig struct {
+	BaseURL string
+	APIKey  string
 }
 
 // LLMRoleConfig 是单个角色的 LLM 覆盖配置，空字段回退到全局 LLMConfig。
@@ -152,7 +158,38 @@ func loadLLMConfig() LLMConfig {
 		APIKey:          globalAPIKey,
 		Model:           globalModel,
 		Roles:           roles,
+		Providers:       loadLLMProviderConfigs(globalBaseURL, globalAPIKey),
 	}
+}
+
+func loadLLMProviderConfigs(globalBaseURL, globalAPIKey string) map[string]LLMProviderConfig {
+	providers := []struct {
+		key            string
+		envPrefix      string
+		defaultBaseURL string
+	}{
+		{key: "openai", envPrefix: "LLM_OPENAI_", defaultBaseURL: "https://api.openai.com/v1"},
+		{key: "deepseek", envPrefix: "LLM_DEEPSEEK_", defaultBaseURL: "https://api.deepseek.com/v1"},
+		{key: "qwen", envPrefix: "LLM_QWEN_", defaultBaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+		{key: "moonshot", envPrefix: "LLM_MOONSHOT_", defaultBaseURL: "https://api.moonshot.cn/v1"},
+		{key: "zhipu", envPrefix: "LLM_ZHIPU_", defaultBaseURL: "https://open.bigmodel.cn/api/paas/v4"},
+		{key: "siliconflow", envPrefix: "LLM_SILICONFLOW_", defaultBaseURL: "https://api.siliconflow.cn/v1"},
+		{key: "openrouter", envPrefix: "LLM_OPENROUTER_", defaultBaseURL: "https://openrouter.ai/api/v1"},
+		{key: "ollama", envPrefix: "LLM_OLLAMA_", defaultBaseURL: "http://localhost:11434/v1"},
+	}
+
+	result := make(map[string]LLMProviderConfig, len(providers))
+	for _, provider := range providers {
+		cfg := LLMProviderConfig{
+			BaseURL: getEnv(provider.envPrefix+"BASE_URL", provider.defaultBaseURL),
+			APIKey:  getEnv(provider.envPrefix+"API_KEY", ""),
+		}
+		if cfg.APIKey == "" && globalBaseURL == cfg.BaseURL {
+			cfg.APIKey = globalAPIKey
+		}
+		result[provider.key] = cfg
+	}
+	return result
 }
 
 func getEnv(key, fallback string) string {

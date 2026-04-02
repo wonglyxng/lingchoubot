@@ -25,6 +25,7 @@ export interface Agent {
   id: string;
   name: string;
   role: string;
+  role_code?: string;
   agent_type: string;
   specialization: string;
   description: string;
@@ -32,6 +33,9 @@ export interface Agent {
   status: string;
   capabilities: unknown;
   metadata: Record<string, unknown>;
+  managed_roles?: unknown;
+  allowed_tools?: unknown;
+  risk_level?: string;
   created_at: string;
   updated_at: string;
 }

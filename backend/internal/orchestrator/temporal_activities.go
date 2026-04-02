@@ -74,11 +74,17 @@ func (a *Activities) ActivityPM(ctx context.Context, input ProjectWorkflowInput)
 		st.fail(ctx, err.Error())
 		return nil, err
 	}
+	agentLLM, err := runtimeAgentLLMConfig(agent)
+	if err != nil {
+		st.fail(ctx, err.Error())
+		return nil, err
+	}
 
 	taskInput := &runtime.AgentTaskInput{
 		RunID:       input.RunID,
 		AgentID:     agent.ID,
 		AgentRole:   "pm",
+		AgentLLM:    agentLLM,
 		Instruction: fmt.Sprintf("分解项目「%s」为阶段和任务", proj.Name),
 		Project:     &runtime.ProjectCtx{ID: proj.ID, Name: proj.Name, Description: proj.Description},
 	}
@@ -212,11 +218,17 @@ func (a *Activities) ActivitySupervisor(ctx context.Context, input TaskChainInpu
 		st.fail(ctx, err.Error())
 		return nil, err
 	}
+	agentLLM, err := runtimeAgentLLMConfig(agent)
+	if err != nil {
+		st.fail(ctx, err.Error())
+		return nil, err
+	}
 
 	taskInput := &runtime.AgentTaskInput{
 		RunID:       input.RunID,
 		AgentID:     agent.ID,
 		AgentRole:   "supervisor",
+		AgentLLM:    agentLLM,
 		Instruction: fmt.Sprintf("为任务「%s」创建契约并分派执行者", task.Title),
 		Project:     &runtime.ProjectCtx{ID: proj.ID, Name: proj.Name, Description: proj.Description},
 		Task:        &runtime.TaskCtx{ID: task.ID, ProjectID: proj.ID, PhaseID: input.PhaseID, Title: task.Title, Description: task.Description, Priority: task.Priority},
@@ -280,6 +292,11 @@ func (a *Activities) ActivityWorker(ctx context.Context, input TaskChainInput) (
 		st.fail(ctx, err.Error())
 		return nil, err
 	}
+	agentLLM, err := runtimeAgentLLMConfig(agent)
+	if err != nil {
+		st.fail(ctx, err.Error())
+		return nil, err
+	}
 
 	var contractCtx *runtime.ContractCtx
 	contract, _ := a.Services.Contract.GetLatestByTaskID(ctx, task.ID)
@@ -291,6 +308,7 @@ func (a *Activities) ActivityWorker(ctx context.Context, input TaskChainInput) (
 		RunID:       input.RunID,
 		AgentID:     agent.ID,
 		AgentRole:   "worker",
+		AgentLLM:    agentLLM,
 		Instruction: fmt.Sprintf("执行任务「%s」并生成交付物", task.Title),
 		Project:     &runtime.ProjectCtx{ID: proj.ID, Name: proj.Name, Description: proj.Description},
 		Task:        &runtime.TaskCtx{ID: task.ID, ProjectID: proj.ID, PhaseID: input.PhaseID, Title: task.Title, Description: task.Description, Priority: task.Priority},
@@ -344,11 +362,17 @@ func (a *Activities) ActivityReviewer(ctx context.Context, input TaskChainInput)
 		st.fail(ctx, err.Error())
 		return nil, err
 	}
+	agentLLM, err := runtimeAgentLLMConfig(agent)
+	if err != nil {
+		st.fail(ctx, err.Error())
+		return nil, err
+	}
 
 	taskInput := &runtime.AgentTaskInput{
 		RunID:       input.RunID,
 		AgentID:     agent.ID,
 		AgentRole:   "reviewer",
+		AgentLLM:    agentLLM,
 		Instruction: fmt.Sprintf("评审任务「%s」的交付物", task.Title),
 		Project:     &runtime.ProjectCtx{ID: proj.ID, Name: proj.Name, Description: proj.Description},
 		Task:        &runtime.TaskCtx{ID: task.ID, ProjectID: proj.ID, PhaseID: input.PhaseID, Title: task.Title, Description: task.Description, Priority: task.Priority},

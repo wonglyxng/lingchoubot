@@ -9,11 +9,12 @@ import (
 
 // LLMAgentRunner implements AgentRunner by calling an OpenAI-compatible LLM.
 type LLMAgentRunner struct {
-	client   *LLMClient
-	role     string
-	spec     string
-	logger   *slog.Logger
-	fallback AgentRunner // optional fallback runner for degradation
+	client          *LLMClient
+	role            string
+	spec            string
+	logger          *slog.Logger
+	providerConfigs map[string]LLMClientConfig
+	fallback        AgentRunner // optional fallback runner for degradation
 }
 
 // LastCallMeta stores metadata from the most recent LLM call (for audit/testing).
@@ -27,16 +28,25 @@ type LastCallMeta struct {
 
 func NewLLMRunner(client *LLMClient, role, specialization string, logger *slog.Logger) *LLMAgentRunner {
 	return &LLMAgentRunner{
-		client: client,
-		role:   role,
-		spec:   specialization,
-		logger: logger,
+		client:          client,
+		role:            role,
+		spec:            specialization,
+		logger:          logger,
+		providerConfigs: map[string]LLMClientConfig{},
 	}
 }
 
 // WithFallback sets a fallback runner for degradation when LLM fails.
 func (r *LLMAgentRunner) WithFallback(fb AgentRunner) *LLMAgentRunner {
 	r.fallback = fb
+	return r
+}
+
+func (r *LLMAgentRunner) WithProviderConfigs(configs map[string]LLMClientConfig) *LLMAgentRunner {
+	r.providerConfigs = make(map[string]LLMClientConfig, len(configs))
+	for key, cfg := range configs {
+		r.providerConfigs[key] = cfg
+	}
 	return r
 }
 
@@ -60,8 +70,25 @@ func (r *LLMAgentRunner) Execute(input *AgentTaskInput) (*AgentTaskOutput, error
 		"instruction", input.Instruction,
 	)
 
+	client, err := r.clientForInput(input)
+	if err != nil {
+		r.logger.Error("resolve llm client failed", "role", r.role, "error", err)
+		if r.fallback != nil {
+			r.logger.Warn("falling back to mock runner", "role", r.role)
+			output, fbErr := r.fallback.Execute(input)
+			if fbErr == nil && output != nil {
+				output.Summary = "[降级] " + output.Summary
+			}
+			return output, fbErr
+		}
+		return &AgentTaskOutput{
+			Status: OutputStatusFailed,
+			Error:  fmt.Sprintf("resolve llm client failed: %s", err.Error()),
+		}, nil
+	}
+
 	ctx := context.Background()
-	raw, meta, err := r.client.ChatJSONWithMeta(ctx, systemPrompt, userPrompt)
+	raw, meta, err := client.ChatJSONWithMeta(ctx, systemPrompt, userPrompt)
 	if meta != nil {
 		meta.PromptVersion = pv.Version
 	}
@@ -175,16 +202,39 @@ func metaTotalTokens(m *LLMCallMeta) int {
 	return m.TotalTokens
 }
 
+func (r *LLMAgentRunner) clientForInput(input *AgentTaskInput) (*LLMClient, error) {
+	if input == nil || input.AgentLLM == nil {
+		return r.client, nil
+	}
+
+	cfg := r.client.cfg
+	if input.AgentLLM.Provider != "" {
+		providerCfg, ok := r.providerConfigs[input.AgentLLM.Provider]
+		if !ok {
+			return nil, fmt.Errorf("unsupported llm provider %q", input.AgentLLM.Provider)
+		}
+		if providerCfg.BaseURL == "" {
+			return nil, fmt.Errorf("llm provider %q missing base_url", input.AgentLLM.Provider)
+		}
+		cfg.BaseURL = providerCfg.BaseURL
+		cfg.APIKey = providerCfg.APIKey
+	}
+	if input.AgentLLM.Model != "" {
+		cfg.Model = input.AgentLLM.Model
+	}
+	return NewLLMClient(cfg), nil
+}
+
 // RegisterLLMRunners registers LLM-based runners for all roles into the given registry.
 // Each role can have its own LLM config (model/base_url/api_key); unconfigured fields
 // fall back to the global defaults provided by defaultClient.
 // When enableFallback is true, each LLM runner is configured with a mock fallback.
-func RegisterLLMRunners(reg *Registry, defaultClient *LLMClient, roleClients map[string]*LLMClient, logger *slog.Logger) {
-	RegisterLLMRunnersWithFallback(reg, defaultClient, roleClients, logger, false)
+func RegisterLLMRunners(reg *Registry, defaultClient *LLMClient, roleClients map[string]*LLMClient, providerConfigs map[string]LLMClientConfig, logger *slog.Logger) {
+	RegisterLLMRunnersWithFallback(reg, defaultClient, roleClients, providerConfigs, logger, false)
 }
 
 // RegisterLLMRunnersWithFallback registers LLM runners with optional mock fallback.
-func RegisterLLMRunnersWithFallback(reg *Registry, defaultClient *LLMClient, roleClients map[string]*LLMClient, logger *slog.Logger, enableFallback bool) {
+func RegisterLLMRunnersWithFallback(reg *Registry, defaultClient *LLMClient, roleClients map[string]*LLMClient, providerConfigs map[string]LLMClientConfig, logger *slog.Logger, enableFallback bool) {
 	getClient := func(role string) *LLMClient {
 		if c, ok := roleClients[role]; ok {
 			return c
@@ -192,10 +242,10 @@ func RegisterLLMRunnersWithFallback(reg *Registry, defaultClient *LLMClient, rol
 		return defaultClient
 	}
 
-	pmRunner := NewLLMRunner(getClient("pm"), "pm", "", logger)
-	supRunner := NewLLMRunner(getClient("supervisor"), "supervisor", "", logger)
-	wrkRunner := NewLLMRunner(getClient("worker"), "worker", "general", logger)
-	revRunner := NewLLMRunner(getClient("reviewer"), "reviewer", "", logger)
+	pmRunner := NewLLMRunner(getClient("pm"), "pm", "", logger).WithProviderConfigs(providerConfigs)
+	supRunner := NewLLMRunner(getClient("supervisor"), "supervisor", "", logger).WithProviderConfigs(providerConfigs)
+	wrkRunner := NewLLMRunner(getClient("worker"), "worker", "general", logger).WithProviderConfigs(providerConfigs)
+	revRunner := NewLLMRunner(getClient("reviewer"), "reviewer", "", logger).WithProviderConfigs(providerConfigs)
 
 	if enableFallback {
 		pmRunner.WithFallback(&MockPMAgent{})
@@ -211,9 +261,9 @@ func RegisterLLMRunnersWithFallback(reg *Registry, defaultClient *LLMClient, rol
 
 	// Specialized workers share the worker client
 	wc := getClient("worker")
-	bw := NewLLMRunner(wc, "worker", "backend", logger)
-	fw := NewLLMRunner(wc, "worker", "frontend", logger)
-	qw := NewLLMRunner(wc, "worker", "qa", logger)
+	bw := NewLLMRunner(wc, "worker", "backend", logger).WithProviderConfigs(providerConfigs)
+	fw := NewLLMRunner(wc, "worker", "frontend", logger).WithProviderConfigs(providerConfigs)
+	qw := NewLLMRunner(wc, "worker", "qa", logger).WithProviderConfigs(providerConfigs)
 	if enableFallback {
 		bw.WithFallback(&MockBackendWorkerAgent{})
 		fw.WithFallback(&MockFrontendWorkerAgent{})

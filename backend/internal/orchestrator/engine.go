@@ -200,11 +200,17 @@ func (e *Engine) runPMPhase(ctx context.Context, rc *runCtx, proj *model.Project
 		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
 	}
+	agentLLM, err := runtimeAgentLLMConfig(pmAgent)
+	if err != nil {
+		_ = e.workflow.FailStep(ctx, step, err.Error())
+		return err
+	}
 
 	input := &runtime.AgentTaskInput{
 		RunID:       rc.run.ID,
 		AgentID:     pmAgent.ID,
 		AgentRole:   "pm",
+		AgentLLM:    agentLLM,
 		Instruction: fmt.Sprintf("分解项目「%s」为阶段和任务", proj.Name),
 		Project:     &runtime.ProjectCtx{ID: proj.ID, Name: proj.Name, Description: proj.Description},
 	}
@@ -351,11 +357,17 @@ func (e *Engine) runSupervisor(ctx context.Context, rc *runCtx, proj *model.Proj
 		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
 	}
+	agentLLM, err := runtimeAgentLLMConfig(agent)
+	if err != nil {
+		_ = e.workflow.FailStep(ctx, step, err.Error())
+		return err
+	}
 
 	input := &runtime.AgentTaskInput{
 		RunID:       rc.run.ID,
 		AgentID:     agent.ID,
 		AgentRole:   "supervisor",
+		AgentLLM:    agentLLM,
 		Instruction: fmt.Sprintf("为任务「%s」创建契约并分派执行者", task.Title),
 		Project:     &runtime.ProjectCtx{ID: proj.ID, Name: proj.Name, Description: proj.Description},
 		Phase:       &runtime.PhaseCtx{ID: phase.ID, ProjectID: proj.ID, Name: phase.Name, Description: phase.Description, SortOrder: phase.SortOrder},
@@ -411,6 +423,11 @@ func (e *Engine) runWorker(ctx context.Context, rc *runCtx, proj *model.Project,
 		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
 	}
+	agentLLM, err := runtimeAgentLLMConfig(agent)
+	if err != nil {
+		_ = e.workflow.FailStep(ctx, step, err.Error())
+		return err
+	}
 
 	var contractCtx *runtime.ContractCtx
 	contract, _ := e.services.Contract.GetLatestByTaskID(ctx, task.ID)
@@ -425,6 +442,7 @@ func (e *Engine) runWorker(ctx context.Context, rc *runCtx, proj *model.Project,
 		RunID:       rc.run.ID,
 		AgentID:     agent.ID,
 		AgentRole:   "worker",
+		AgentLLM:    agentLLM,
 		Instruction: fmt.Sprintf("执行任务「%s」并生成交付物", task.Title),
 		Project:     &runtime.ProjectCtx{ID: proj.ID, Name: proj.Name, Description: proj.Description},
 		Phase:       &runtime.PhaseCtx{ID: phase.ID, ProjectID: proj.ID, Name: phase.Name, Description: phase.Description, SortOrder: phase.SortOrder},
@@ -472,11 +490,17 @@ func (e *Engine) runReviewer(ctx context.Context, rc *runCtx, proj *model.Projec
 		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
 	}
+	agentLLM, err := runtimeAgentLLMConfig(agent)
+	if err != nil {
+		_ = e.workflow.FailStep(ctx, step, err.Error())
+		return err
+	}
 
 	input := &runtime.AgentTaskInput{
 		RunID:       rc.run.ID,
 		AgentID:     agent.ID,
 		AgentRole:   "reviewer",
+		AgentLLM:    agentLLM,
 		Instruction: fmt.Sprintf("评审任务「%s」的交付物", task.Title),
 		Project:     &runtime.ProjectCtx{ID: proj.ID, Name: proj.Name, Description: proj.Description},
 		Task:        &runtime.TaskCtx{ID: task.ID, ProjectID: proj.ID, PhaseID: phase.ID, Title: task.Title, Description: task.Description, Priority: task.Priority},

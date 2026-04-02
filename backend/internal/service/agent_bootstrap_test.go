@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/lingchou/lingchoubot/backend/internal/model"
@@ -261,5 +262,56 @@ func TestAgentServiceUpdateRejectsDuplicateRoleCode(t *testing.T) {
 	})
 	if !errors.Is(err, ErrAgentRoleCodeConflict) {
 		t.Fatalf("Update error = %v, want ErrAgentRoleCodeConflict", err)
+	}
+}
+
+func TestAgentServiceCreateDefaultsToLLMWithMetadata(t *testing.T) {
+	ctx := context.Background()
+	auditSvc, _ := newTestAuditService()
+	repo := &bootstrapAgentRepo{agents: map[string]*model.Agent{}}
+	svc := NewAgentService(repo, auditSvc)
+	agent := &model.Agent{
+		Name:           "Default LLM Agent",
+		Role:           model.AgentRoleWorker,
+		Specialization: model.AgentSpecBackend,
+	}
+
+	if err := svc.Create(ctx, agent); err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if agent.AgentType != model.AgentTypeLLM {
+		t.Fatalf("agent type = %s, want %s", agent.AgentType, model.AgentTypeLLM)
+	}
+	llm, err := agent.GetLLMConfig()
+	if err != nil {
+		t.Fatalf("GetLLMConfig returned error: %v", err)
+	}
+	if llm == nil {
+		t.Fatal("expected llm config to be initialized")
+	}
+	if llm.Provider != model.DefaultAgentLLMProvider {
+		t.Fatalf("provider = %s, want %s", llm.Provider, model.DefaultAgentLLMProvider)
+	}
+	if llm.Model != model.DefaultAgentLLMModel {
+		t.Fatalf("model = %s, want %s", llm.Model, model.DefaultAgentLLMModel)
+	}
+}
+
+func TestAgentServiceCreateRejectsUnsupportedLLMProvider(t *testing.T) {
+	ctx := context.Background()
+	auditSvc, _ := newTestAuditService()
+	repo := &bootstrapAgentRepo{agents: map[string]*model.Agent{}}
+	svc := NewAgentService(repo, auditSvc)
+	agent := &model.Agent{
+		Name:           "Bad LLM Agent",
+		Role:           model.AgentRoleWorker,
+		AgentType:      model.AgentTypeLLM,
+		Specialization: model.AgentSpecBackend,
+		Metadata:       model.JSON(`{"llm":{"provider":"unsupported","model":"foo"}}`),
+	}
+
+	err := svc.Create(ctx, agent)
+	if err == nil || !strings.Contains(err.Error(), "unsupported llm provider") {
+		t.Fatalf("Create error = %v, want unsupported llm provider", err)
 	}
 }

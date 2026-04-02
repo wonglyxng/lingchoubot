@@ -16,16 +16,22 @@ type SpecializedRunner interface {
 
 // AgentTaskInput packages everything an agent needs to execute its work.
 type AgentTaskInput struct {
-	RunID       string         `json:"run_id"`
-	AgentID     string         `json:"agent_id"`
-	AgentRole   string         `json:"agent_role"`
-	Instruction string         `json:"instruction"`
-	Project     *ProjectCtx    `json:"project,omitempty"`
-	Phase       *PhaseCtx      `json:"phase,omitempty"`
-	Task        *TaskCtx       `json:"task,omitempty"`
-	Contract    *ContractCtx   `json:"contract,omitempty"`
-	Artifacts   []ArtifactCtx  `json:"artifacts,omitempty"`
-	Parameters  map[string]any `json:"parameters,omitempty"`
+	RunID       string          `json:"run_id"`
+	AgentID     string          `json:"agent_id"`
+	AgentRole   string          `json:"agent_role"`
+	AgentLLM    *AgentLLMConfig `json:"agent_llm,omitempty"`
+	Instruction string          `json:"instruction"`
+	Project     *ProjectCtx     `json:"project,omitempty"`
+	Phase       *PhaseCtx       `json:"phase,omitempty"`
+	Task        *TaskCtx        `json:"task,omitempty"`
+	Contract    *ContractCtx    `json:"contract,omitempty"`
+	Artifacts   []ArtifactCtx   `json:"artifacts,omitempty"`
+	Parameters  map[string]any  `json:"parameters,omitempty"`
+}
+
+type AgentLLMConfig struct {
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
 }
 
 type ProjectCtx struct {
