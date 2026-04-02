@@ -66,6 +66,7 @@ const workflowStatusMap: Record<string, StatusDef> = {
   pending:   { label: "待运行", variant: "default" },
   running:   { label: "运行中", variant: "info" },
   waiting_approval: { label: "等待审批", variant: "warning" },
+  waiting_manual_intervention: { label: "待人工介入", variant: "error" },
   completed: { label: "已完成", variant: "success" },
   failed:    { label: "失败",   variant: "error" },
   cancelled: { label: "已取消", variant: "muted" },

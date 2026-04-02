@@ -194,11 +194,10 @@ export interface WorkflowRun {
   id: string;
   project_id: string;
   status: string;
-  trigger: string;
-  result_summary: string;
+  summary: string;
   error: string;
-  metadata: Record<string, unknown>;
   steps?: WorkflowStep[];
+  started_at?: string;
   created_at: string;
   updated_at: string;
   completed_at?: string;
@@ -207,17 +206,18 @@ export interface WorkflowRun {
 export interface WorkflowStep {
   id: string;
   run_id: string;
-  step_name: string;
+  name: string;
+  agent_role: string;
   agent_id?: string;
+  task_id?: string;
+  phase_id?: string;
   status: string;
-  input_summary: string;
-  output_summary: string;
+  summary: string;
   error: string;
-  duration_ms: number;
   sort_order: number;
-  metadata: Record<string, unknown>;
-  created_at: string;
+  started_at?: string;
   completed_at?: string;
+  created_at: string;
 }
 
 export interface LLMProvider {

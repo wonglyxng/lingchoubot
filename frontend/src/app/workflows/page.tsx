@@ -2,13 +2,13 @@
 
 import Link from "next/link";
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
-import { Activity, ChevronDown, ChevronRight, Play, RefreshCw, Wifi, WifiOff } from "lucide-react";
+import { Activity, AlertTriangle, ChevronDown, ChevronRight, Play, RefreshCw, Wifi, WifiOff } from "lucide-react";
 import { api } from "@/lib/api";
 import type { WorkflowRun, WorkflowStep, Project } from "@/lib/types";
 import { StatusBadge } from "@/components/StatusBadge";
 import { FormModal, FormField, selectClass } from "@/components/FormModal";
 import { getWorkflowStatus, formatTime, relativeTime } from "@/lib/utils";
-import { useEventStream, type SSEEvent } from "@/lib/useEventStream";
+import { useEventStream } from "@/lib/useEventStream";
 
 function stepStatusVariant(status: string) {
   switch (status) {
@@ -22,20 +22,23 @@ function stepStatusVariant(status: string) {
 
 function StepRow({ step }: { step: WorkflowStep }) {
   const v = stepStatusVariant(step.status);
+  const durationMs = step.started_at && step.completed_at
+    ? new Date(step.completed_at).getTime() - new Date(step.started_at).getTime()
+    : 0;
   return (
     <div className="flex items-center gap-3 rounded border border-gray-100 bg-gray-50/50 px-3 py-2 text-sm">
       <span className="w-6 shrink-0 text-center text-xs text-gray-400">
         #{step.sort_order}
       </span>
       <span className="min-w-0 flex-1 font-medium text-gray-800">
-        {step.step_name}
+        {step.name}
       </span>
       <StatusBadge label={step.status} variant={v} />
-      {step.duration_ms != null && step.duration_ms > 0 && (
+      {durationMs > 0 && (
         <span className="text-xs text-gray-500">
-          {step.duration_ms >= 1000
-            ? `${(step.duration_ms / 1000).toFixed(1)}s`
-            : `${step.duration_ms}ms`}
+          {durationMs >= 1000
+            ? `${(durationMs / 1000).toFixed(1)}s`
+            : `${durationMs}ms`}
         </span>
       )}
       {step.error && (
@@ -60,10 +63,26 @@ function RunCard({
 }) {
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
   const [loadingSteps, setLoadingSteps] = useState(false);
+  const [resuming, setResuming] = useState(false);
   const st = getWorkflowStatus(run.status);
   const isRunning = run.status === "running" || run.status === "pending";
   const shouldPoll = isRunning || run.status === "waiting_approval";
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const canResume = run.status === "waiting_manual_intervention" || run.status === "waiting_approval";
+
+  const handleResume = async () => {
+    setResuming(true);
+    try {
+      await api.workflows.resume(run.id);
+      const updated = await api.workflows.get(run.id);
+      onRunUpdated?.(updated);
+      setSteps(Array.isArray(updated.steps) ? updated.steps : []);
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : "恢复执行失败");
+    } finally {
+      setResuming(false);
+    }
+  };
 
   // Load steps + poll if running
   useEffect(() => {
@@ -95,39 +114,49 @@ function RunCard({
 
   return (
     <div className="rounded-lg border border-gray-200 bg-white">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-gray-50"
-      >
-        {expanded ? (
-          <ChevronDown className="h-4 w-4 shrink-0 text-gray-400" />
-        ) : (
-          <ChevronRight className="h-4 w-4 shrink-0 text-gray-400" />
-        )}
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-semibold text-gray-900">
-              运行 #{run.id.slice(0, 8)}
-            </span>
-            <StatusBadge label={st.label} variant={st.variant} />
-            {isRunning && (
-              <RefreshCw className="h-3.5 w-3.5 animate-spin text-blue-500" />
-            )}
-            {run.trigger && (
-              <span className="text-xs text-gray-500">触发: {run.trigger}</span>
-            )}
+      <div className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+        >
+          {expanded ? (
+            <ChevronDown className="h-4 w-4 shrink-0 text-gray-400" />
+          ) : (
+            <ChevronRight className="h-4 w-4 shrink-0 text-gray-400" />
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold text-gray-900">
+                运行 #{run.id.slice(0, 8)}
+              </span>
+              <StatusBadge label={st.label} variant={st.variant} />
+              {isRunning && (
+                <RefreshCw className="h-3.5 w-3.5 animate-spin text-blue-500" />
+              )}
+            </div>
+            <p className="mt-0.5 text-xs text-gray-500">
+              {formatTime(run.created_at)} · {relativeTime(run.created_at)}
+            </p>
           </div>
-          <p className="mt-0.5 text-xs text-gray-500">
-            {formatTime(run.created_at)} · {relativeTime(run.created_at)}
-          </p>
-        </div>
-        {run.result_summary && (
-          <span className="max-w-[300px] truncate text-xs text-gray-600">
-            {run.result_summary}
-          </span>
+          {run.summary && (
+            <span className="max-w-[300px] truncate text-xs text-gray-600">
+              {run.summary}
+            </span>
+          )}
+        </button>
+        {canResume && (
+          <button
+            type="button"
+            onClick={handleResume}
+            disabled={resuming}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Play className="h-3.5 w-3.5" />
+            {resuming ? "恢复中..." : "恢复执行"}
+          </button>
         )}
-      </button>
+      </div>
 
       {expanded && (
         <div className="border-t border-gray-100 px-4 py-3">
@@ -164,6 +193,17 @@ function RunCard({
               当前运行已在审批关口暂停。同一阶段内任务可并行待批；跨阶段会等待本阶段审批收口后再继续推进。
             </div>
           )}
+          {run.status === "waiting_manual_intervention" && (
+            <div className="mt-2 rounded border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-800">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+                <div>
+                  <div className="font-medium">当前运行因真实 LLM 调用失败而暂停，等待人工介入。</div>
+                  <div className="mt-1 text-red-700">修复供应商配置、模型权限或上下文问题后，可点击“恢复执行”继续。</div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -194,7 +234,7 @@ export default function WorkflowsPage() {
 
   // SSE real-time updates: refresh list on any workflow event
   const topics = useMemo(() => ["workflow"], []);
-  const onEvent = useCallback((_evt: SSEEvent) => {
+  const onEvent = useCallback(() => {
     // Refresh full list when workflow events arrive
     api.workflows
       .list({ limit: 50 })
@@ -239,7 +279,7 @@ export default function WorkflowsPage() {
 
   const handleRunUpdated = useCallback((updated: WorkflowRun) => {
     setRuns((prev) =>
-      prev.map((r) => (r.id === updated.id ? { ...r, status: updated.status, result_summary: updated.result_summary, error: updated.error } : r))
+      prev.map((r) => (r.id === updated.id ? { ...r, status: updated.status, summary: updated.summary, error: updated.error, steps: updated.steps } : r))
     );
   }, []);
 

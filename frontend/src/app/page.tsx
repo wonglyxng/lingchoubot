@@ -19,7 +19,7 @@ import { api } from "@/lib/api";
 import type { WorkflowRun, ApprovalRequest, AuditLog } from "@/lib/types";
 import { StatusBadge } from "@/components/StatusBadge";
 import { getWorkflowStatus, getApprovalStatus, relativeTime } from "@/lib/utils";
-import { useEventStream, type SSEEvent } from "@/lib/useEventStream";
+import { useEventStream } from "@/lib/useEventStream";
 
 interface HealthStatus {
   api: "ok" | "error" | "loading";
@@ -34,15 +34,15 @@ export default function Home() {
   const [activeRuns, setActiveRuns] = useState<WorkflowRun[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<ApprovalRequest[]>([]);
   const [recentAudit, setRecentAudit] = useState<AuditLog[]>([]);
-  const [failedRuns, setFailedRuns] = useState<WorkflowRun[]>([]);
+  const [manualRuns, setManualRuns] = useState<WorkflowRun[]>([]);
 
   const fetchDashboard = useCallback(() => {
     api.workflows.list({ status: "running", limit: 10 })
       .then((res) => setActiveRuns(res.items ?? []))
       .catch(() => setActiveRuns([]));
-    api.workflows.list({ status: "failed", limit: 5 })
-      .then((res) => setFailedRuns(res.items ?? []))
-      .catch(() => setFailedRuns([]));
+    api.workflows.list({ status: "waiting_manual_intervention", limit: 5 })
+      .then((res) => setManualRuns(res.items ?? []))
+      .catch(() => setManualRuns([]));
     api.approvals.list({ status: "pending" })
       .then((res) => setPendingApprovals(res.items ?? []))
       .catch(() => setPendingApprovals([]));
@@ -74,7 +74,7 @@ export default function Home() {
 
   // SSE real-time updates for dashboard
   const topics = useMemo(() => ["workflow", "approval", "audit", "tool_call"], []);
-  const onEvent = useCallback((_evt: SSEEvent) => {
+  const onEvent = useCallback(() => {
     fetchDashboard();
   }, [fetchDashboard]);
 
@@ -187,35 +187,35 @@ export default function Home() {
           )}
         </div>
 
-        {/* Recent Failures */}
+        {/* Manual Intervention */}
         <div className="rounded-lg border border-gray-200 bg-white p-4">
           <div className="mb-3 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <AlertTriangle className="h-4 w-4 text-red-600" />
-              <span className="text-sm font-medium text-gray-900">最近失败</span>
+              <span className="text-sm font-medium text-gray-900">待人工介入</span>
             </div>
             <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-              failedRuns.length > 0
+              manualRuns.length > 0
                 ? "bg-red-100 text-red-700"
                 : "bg-gray-100 text-gray-500"
             }`}>
-              {failedRuns.length}
+              {manualRuns.length}
             </span>
           </div>
-          {failedRuns.length === 0 ? (
+          {manualRuns.length === 0 ? (
             <div className="flex items-center gap-1 text-xs text-gray-400">
               <CheckCircle className="h-3 w-3 text-green-500" />
-              无失败运行
+              无待人工介入项
             </div>
           ) : (
             <ul className="space-y-2">
-              {failedRuns.slice(0, 5).map((r) => (
+              {manualRuns.slice(0, 5).map((r) => (
                 <li key={r.id} className="flex items-center justify-between text-xs">
                   <Link href="/workflows" className="font-mono text-red-600 hover:underline">
                     #{r.id.slice(0, 8)}
                   </Link>
                   <span className="max-w-[120px] truncate text-red-500" title={r.error || ""}>
-                    {r.error || "失败"}
+                    {r.error || "等待介入"}
                   </span>
                 </li>
               ))}
