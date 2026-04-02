@@ -310,11 +310,10 @@ func TestLLMRunner_Fallback_OnLLMError(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	runner := &LLMAgentRunner{
-		client:   newTestLLMClient("", fmt.Errorf("connection refused")),
-		role:     "pm",
-		spec:     "",
-		logger:   logger,
-		fallback: &MockPMAgent{},
+		client: newTestLLMClient("", fmt.Errorf("connection refused")),
+		role:   "pm",
+		spec:   "",
+		logger: logger,
 	}
 
 	input := &AgentTaskInput{
@@ -338,11 +337,10 @@ func TestLLMRunner_Fallback_OnParseError(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	runner := &LLMAgentRunner{
-		client:   newTestLLMClient("not json", nil),
-		role:     "worker",
-		spec:     "backend",
-		logger:   logger,
-		fallback: &MockBackendWorkerAgent{},
+		client: newTestLLMClient("not json", nil),
+		role:   "worker",
+		spec:   "backend",
+		logger: logger,
 	}
 
 	input := &AgentTaskInput{
@@ -368,11 +366,10 @@ func TestLLMRunner_Fallback_OnValidationError(t *testing.T) {
 	// PM output missing phases and tasks → validation fails
 	mockOutput := `{"status":"success","summary":"done"}`
 	runner := &LLMAgentRunner{
-		client:   newTestLLMClient(mockOutput, nil),
-		role:     "pm",
-		spec:     "",
-		logger:   logger,
-		fallback: &MockPMAgent{},
+		client: newTestLLMClient(mockOutput, nil),
+		role:   "pm",
+		spec:   "",
+		logger: logger,
 	}
 
 	input := &AgentTaskInput{
@@ -391,50 +388,6 @@ func TestLLMRunner_Fallback_OnValidationError(t *testing.T) {
 		t.Errorf("expected failed status, got %s", output.Status)
 	}
 }
-
-func TestLLMRunner_WithFallback(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	runner := NewLLMRunner(nil, "pm", "", logger)
-	if runner.fallback != nil {
-		t.Error("initially fallback should be nil")
-	}
-	fb := &MockPMAgent{}
-	runner.WithFallback(fb)
-	if runner.fallback != fb {
-		t.Error("WithFallback should set the fallback runner")
-	}
-}
-
-func TestRegisterLLMRunnersWithFallback(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	reg := NewRegistry()
-
-	defaultClient := NewLLMClient(LLMClientConfig{
-		BaseURL: "http://default.example.com",
-		APIKey:  "default-key",
-		Model:   "default-model",
-	})
-
-	RegisterLLMRunnersWithFallback(reg, defaultClient, nil, nil, nil, logger, true)
-
-	// Wrapper should still register all roles, but fallback is no longer active.
-	for _, role := range []string{"pm", "supervisor", "worker", "reviewer"} {
-		runner, err := reg.Get(role)
-		if err != nil {
-			t.Errorf("expected runner for %s: %v", role, err)
-			continue
-		}
-		llmR, ok := runner.(*LLMAgentRunner)
-		if !ok {
-			t.Errorf("expected *LLMAgentRunner for %s", role)
-			continue
-		}
-		if llmR.fallback != nil {
-			t.Errorf("fallback should remain inactive for %s", role)
-		}
-	}
-}
-
 func TestMetaHelpers(t *testing.T) {
 	// nil meta
 	if metaDurationMs(nil) != 0 {

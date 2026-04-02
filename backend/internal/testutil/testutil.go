@@ -1126,9 +1126,9 @@ func NewFixture() *Fixture {
 	toolCallSvc := service.NewToolCallService(toolCallRepo, auditSvc)
 	workflowSvc := service.NewWorkflowService(runRepo, stepRepo, auditSvc)
 
-	// registry with mock agents
+	// registry with deterministic test runners
 	reg := runtime.NewRegistry()
-	reg.RegisterDefaults()
+	registerDeterministicTestRunners(reg)
 
 	// orchestrator engine
 	svc := &orchestrator.Services{

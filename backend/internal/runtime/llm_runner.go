@@ -15,7 +15,6 @@ type LLMAgentRunner struct {
 	logger          *slog.Logger
 	providerConfigs map[string]LLMClientConfig
 	providerLookup  ProviderConfigLookup // dynamic lookup (e.g. DB-backed), tried before static map
-	fallback        AgentRunner          // deprecated: retained only for backward-compatible tests
 }
 
 // ProviderConfigLookup resolves a provider's connection config dynamically.
@@ -28,7 +27,6 @@ type LastCallMeta struct {
 	Meta            *LLMCallMeta
 	PromptVersion   PromptVersion
 	ValidationError error
-	UsedFallback    bool
 }
 
 func NewLLMRunner(client *LLMClient, role, specialization string, logger *slog.Logger) *LLMAgentRunner {
@@ -39,12 +37,6 @@ func NewLLMRunner(client *LLMClient, role, specialization string, logger *slog.L
 		logger:          logger,
 		providerConfigs: map[string]LLMClientConfig{},
 	}
-}
-
-// WithFallback is deprecated and no longer affects execution.
-func (r *LLMAgentRunner) WithFallback(fb AgentRunner) *LLMAgentRunner {
-	r.fallback = fb
-	return r
 }
 
 func (r *LLMAgentRunner) WithProviderConfigs(configs map[string]LLMClientConfig) *LLMAgentRunner {
@@ -254,9 +246,4 @@ func RegisterLLMRunnersWithProviderLookup(reg *Registry, defaultClient *LLMClien
 	reg.RegisterSpecialized("worker", "backend", bw)
 	reg.RegisterSpecialized("worker", "frontend", fw)
 	reg.RegisterSpecialized("worker", "qa", qw)
-}
-
-// RegisterLLMRunnersWithFallback is deprecated. The enableFallback parameter is ignored.
-func RegisterLLMRunnersWithFallback(reg *Registry, defaultClient *LLMClient, roleClients map[string]*LLMClient, providerConfigs map[string]LLMClientConfig, providerLookup ProviderConfigLookup, logger *slog.Logger, enableFallback bool) {
-	RegisterLLMRunnersWithProviderLookup(reg, defaultClient, roleClients, providerConfigs, providerLookup, logger)
 }

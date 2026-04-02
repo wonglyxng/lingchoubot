@@ -56,7 +56,7 @@ func normalizeAgentForWrite(a *model.Agent) error {
 		a.AgentType = model.AgentTypeLLM
 	}
 	switch a.AgentType {
-	case model.AgentTypeLLM, model.AgentTypeHuman, model.AgentTypeMock:
+	case model.AgentTypeLLM, model.AgentTypeHuman:
 	default:
 		return fmt.Errorf("unsupported agent type: %s", a.AgentType)
 	}

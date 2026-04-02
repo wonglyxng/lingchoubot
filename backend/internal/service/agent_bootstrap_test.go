@@ -225,8 +225,9 @@ func TestAgentServiceCreateRejectsDuplicateRoleCode(t *testing.T) {
 		Role:           model.AgentRolePM,
 		RoleCode:       model.RoleCodePMSupervisor,
 		Status:         model.AgentStatusActive,
-		AgentType:      model.AgentTypeMock,
+		AgentType:      model.AgentTypeLLM,
 		Specialization: model.AgentSpecGeneral,
+		Metadata:       model.JSON(`{"llm":{"provider":"openai","model":"gpt-4.1-mini"}}`),
 	})
 	if !errors.Is(err, ErrAgentRoleCodeConflict) {
 		t.Fatalf("Create error = %v, want ErrAgentRoleCodeConflict", err)
@@ -252,8 +253,9 @@ func TestAgentServiceUpdateRejectsDuplicateRoleCode(t *testing.T) {
 			Role:           model.AgentRoleWorker,
 			RoleCode:       model.RoleCodeBackendDevWorker,
 			Status:         model.AgentStatusActive,
-			AgentType:      model.AgentTypeMock,
+			AgentType:      model.AgentTypeLLM,
 			Specialization: model.AgentSpecBackend,
+			Metadata:       model.JSON(`{"llm":{"provider":"openai","model":"gpt-4.1-mini"}}`),
 		},
 	}}
 	svc := NewAgentService(repo, auditSvc)
@@ -264,8 +266,9 @@ func TestAgentServiceUpdateRejectsDuplicateRoleCode(t *testing.T) {
 		Role:           model.AgentRoleWorker,
 		RoleCode:       model.RoleCodePMSupervisor,
 		Status:         model.AgentStatusActive,
-		AgentType:      model.AgentTypeMock,
+		AgentType:      model.AgentTypeLLM,
 		Specialization: model.AgentSpecBackend,
+		Metadata:       model.JSON(`{"llm":{"provider":"openai","model":"gpt-4.1-mini"}}`),
 	})
 	if !errors.Is(err, ErrAgentRoleCodeConflict) {
 		t.Fatalf("Update error = %v, want ErrAgentRoleCodeConflict", err)

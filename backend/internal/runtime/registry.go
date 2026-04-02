@@ -67,16 +67,3 @@ func (r *Registry) Roles() []string {
 	}
 	return roles
 }
-
-// RegisterDefaults registers all mock agent runners.
-func (r *Registry) RegisterDefaults() {
-	r.Register("pm", &MockPMAgent{})
-	r.Register("supervisor", &MockSupervisorAgent{})
-	r.Register("worker", &MockWorkerAgent{})
-	r.Register("reviewer", &MockReviewerAgent{})
-
-	// Specialized workers
-	r.RegisterSpecialized("worker", "backend", &MockBackendWorkerAgent{})
-	r.RegisterSpecialized("worker", "frontend", &MockFrontendWorkerAgent{})
-	r.RegisterSpecialized("worker", "qa", &MockQAWorkerAgent{})
-}

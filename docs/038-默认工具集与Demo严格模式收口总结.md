@@ -104,6 +104,6 @@ go run ./cmd/demo
 
 ## 7. 已知限制
 
-- 仓库内仍保留 `DocGeneratorTool`、`TestRunnerTool` 和 `AgentTypeMock` 等兼容定义，主要用于类型兼容与历史测试覆盖；它们已不在默认运行时链路中生效。
+- 仓库内仍保留 `DocGeneratorTool`、`TestRunnerTool` 这类 fail-closed 兼容工具类型；它们已不在默认运行时链路中生效。
 - Demo 现在依赖真实对象存储链路，因此若 MinIO 未配置或不可用，Tool Gateway 演示步骤会按严格模式直接失败。
 - 本次未清理所有测试中的 `mock` 字面量，因为这些用例仍在验证兼容分支和模型枚举本身，而不是生产运行时行为。

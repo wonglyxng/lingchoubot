@@ -144,54 +144,63 @@ func main() {
 		len(phases), len(tasks), len(artifacts), len(reviews), len(orgTree))
 
 	// --- Step 6: 审批流转演示（批准路径） ---
-	next("审批流转演示（创建审批 → 批准 → 任务自动完成）")
+	next("审批流转演示（消费待审批项 → 任务自动完成）")
 
-	// 收集所有 in_review 状态的任务
-	var inReviewTasks []map[string]any
+	taskByID := make(map[string]map[string]any, len(tasks))
 	for _, t := range tasks {
 		tm := t.(map[string]any)
-		if getString(tm, "status") == "in_review" {
-			inReviewTasks = append(inReviewTasks, tm)
+		taskByID[getString(tm, "id")] = tm
+	}
+	approvals := mustListItems("审批请求", "GET", "/api/v1/approvals?project_id="+projID+"&limit=100")
+	var pendingApprovals []map[string]any
+	for _, item := range approvals {
+		approval := item.(map[string]any)
+		if getString(approval, "status") == "pending" && getString(approval, "task_id") != "" {
+			pendingApprovals = append(pendingApprovals, approval)
 		}
 	}
 
 	var targetTaskID string
 	var targetTaskTitle string
-	if len(inReviewTasks) > 0 {
-		targetTaskID = getString(inReviewTasks[0], "id")
-		targetTaskTitle = getString(inReviewTasks[0], "title")
-
-		approvalID := mustCreateApproval(projID, targetTaskID, rvID, pmID, targetTaskTitle)
-		printOK("审批请求已创建: %s (任务: %s)", short(approvalID), targetTaskTitle)
+	if len(pendingApprovals) > 0 {
+		approvalID := getString(pendingApprovals[0], "id")
+		targetTaskID = getString(pendingApprovals[0], "task_id")
+		targetTaskTitle = getString(taskByID[targetTaskID], "title")
+		if targetTaskTitle == "" {
+			targetTaskTitle = getString(pendingApprovals[0], "title")
+		}
+		printOK("待审批项已找到: %s (任务: %s)", short(approvalID), targetTaskTitle)
 
 		mustApprove(approvalID)
 		printOK("审批已通过")
 
 		updatedTask := mustGet(fmt.Sprintf("/api/v1/tasks/%s", targetTaskID))
 		newStatus := getString(updatedTask, "status")
-		printOK("任务「%s」状态已自动流转: in_review → %s", targetTaskTitle, newStatus)
+		printOK("任务「%s」状态已自动流转: pending_approval → %s", targetTaskTitle, newStatus)
 	} else {
-		fmt.Println("  ⚠ 未找到处于 in_review 状态的任务，跳过审批批准演示")
+		fatal("未找到待审批项，无法继续审批批准演示")
 	}
 
 	// --- Step 6.5: 审批拒绝路径 ---
-	next("审批拒绝链路演示（创建审批 → 拒绝 → 任务回退 revision_required）")
+	next("审批拒绝链路演示（消费待审批项 → 拒绝 → 任务回退 revision_required）")
 
 	var rejectTaskID string
 	var rejectTaskTitle string
-	if len(inReviewTasks) > 1 {
-		rejectTaskID = getString(inReviewTasks[1], "id")
-		rejectTaskTitle = getString(inReviewTasks[1], "title")
-
-		rejectApprovalID := mustCreateApproval(projID, rejectTaskID, rvID, pmID, rejectTaskTitle)
-		printOK("审批请求已创建: %s (任务: %s)", short(rejectApprovalID), rejectTaskTitle)
+	if len(pendingApprovals) > 1 {
+		rejectApprovalID := getString(pendingApprovals[1], "id")
+		rejectTaskID = getString(pendingApprovals[1], "task_id")
+		rejectTaskTitle = getString(taskByID[rejectTaskID], "title")
+		if rejectTaskTitle == "" {
+			rejectTaskTitle = getString(pendingApprovals[1], "title")
+		}
+		printOK("第二个待审批项已找到: %s (任务: %s)", short(rejectApprovalID), rejectTaskTitle)
 
 		mustReject(rejectApprovalID, "交付物不符合验收标准，需要修订")
 		printOK("审批已拒绝")
 
 		rejectedTask := mustGet(fmt.Sprintf("/api/v1/tasks/%s", rejectTaskID))
 		rejStatus := getString(rejectedTask, "status")
-		printOK("任务「%s」状态已自动回退: in_review → %s", rejectTaskTitle, rejStatus)
+		printOK("任务「%s」状态已自动回退: pending_approval → %s", rejectTaskTitle, rejStatus)
 		if rejStatus != "revision_required" {
 			fmt.Printf("  ⚠ 期望状态 revision_required，实际 %s\n", rejStatus)
 		}
@@ -525,7 +534,7 @@ func mustStartWorkflow(projectID string) map[string]any {
 			status = getString(polled, "status")
 			steps := getArray(polled, "steps")
 			fmt.Printf("  ⏳ [%ds] 状态: %s, 步骤: %d\n", waited+pollInterval, status, len(steps))
-			if status == "completed" || status == "failed" {
+			if status == "completed" || status == "waiting_approval" || status == "failed" {
 				return polled
 			}
 		}

@@ -72,8 +72,9 @@ func TestAgentHandlerUpdateRoleCodeConflict(t *testing.T) {
 		Role:           model.AgentRolePM,
 		RoleCode:       model.RoleCodePMSupervisor,
 		Status:         model.AgentStatusActive,
-		AgentType:      model.AgentTypeMock,
+		AgentType:      model.AgentTypeLLM,
 		Specialization: model.AgentSpecGeneral,
+		Metadata:       model.JSON(`{"llm":{"provider":"openai","model":"gpt-4.1-mini"}}`),
 	}); err != nil {
 		t.Fatalf("seed PM: %v", err)
 	}
@@ -82,14 +83,15 @@ func TestAgentHandlerUpdateRoleCodeConflict(t *testing.T) {
 		Role:           model.AgentRoleWorker,
 		RoleCode:       model.RoleCodeBackendDevWorker,
 		Status:         model.AgentStatusActive,
-		AgentType:      model.AgentTypeMock,
+		AgentType:      model.AgentTypeLLM,
 		Specialization: model.AgentSpecBackend,
+		Metadata:       model.JSON(`{"llm":{"provider":"openai","model":"gpt-4.1-mini"}}`),
 	}
 	if err := agentSvc.Create(ctx, worker); err != nil {
 		t.Fatalf("seed worker: %v", err)
 	}
 
-	updateBody := []byte(`{"name":"Backend Worker","role":"worker","role_code":"PM_SUPERVISOR","status":"active","agent_type":"mock","specialization":"backend"}`)
+	updateBody := []byte(`{"name":"Backend Worker","role":"worker","role_code":"PM_SUPERVISOR","status":"active","agent_type":"llm","specialization":"backend","metadata":{"llm":{"provider":"openai","model":"gpt-4.1-mini"}}}`)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+worker.ID, bytes.NewReader(updateBody))
 	mux.ServeHTTP(w, r)
@@ -123,8 +125,9 @@ func TestAgentHandlerUpdatePreservesExistingRoleCodeWhenOmitted(t *testing.T) {
 		Role:           model.AgentRoleWorker,
 		RoleCode:       model.RoleCodeBackendDevWorker,
 		Status:         model.AgentStatusActive,
-		AgentType:      model.AgentTypeMock,
+		AgentType:      model.AgentTypeLLM,
 		Specialization: model.AgentSpecBackend,
+		Metadata:       model.JSON(`{"llm":{"provider":"openai","model":"gpt-4.1-mini"}}`),
 	}); err != nil {
 		t.Fatalf("seed backend worker: %v", err)
 	}

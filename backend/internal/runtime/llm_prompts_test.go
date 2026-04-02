@@ -88,26 +88,62 @@ func TestEvalSamples_Count(t *testing.T) {
 }
 
 func TestEvalSamples_Validation(t *testing.T) {
-	// Verify that mock runners can produce valid output for each eval sample
 	samples := EvalSamples()
-	mockRunners := map[string]AgentRunner{
-		"pm":         &MockPMAgent{},
-		"supervisor": &MockSupervisorAgent{},
-		"worker":     &MockBackendWorkerAgent{},
-		"reviewer":   &MockReviewerAgent{},
-	}
 	for _, s := range samples {
-		runner, ok := mockRunners[s.Role]
-		if !ok {
-			continue
-		}
-		output, err := runner.Execute(s.Input)
-		if err != nil {
-			t.Errorf("sample %s: mock runner error: %v", s.Name, err)
-			continue
-		}
+		output := validEvalOutputForSample(s)
 		if valErr := ValidateOutput(s.Role, s.Spec, output); valErr != nil {
-			t.Errorf("sample %s: mock output fails validation: %v", s.Name, valErr)
+			t.Errorf("sample %s: deterministic output fails validation: %v", s.Name, valErr)
 		}
+	}
+}
+
+func validEvalOutputForSample(sample EvalSample) *AgentTaskOutput {
+	switch sample.Role {
+	case "pm":
+		return &AgentTaskOutput{
+			Status:  OutputStatusSuccess,
+			Summary: "项目已拆解",
+			Phases: []PhaseAction{{Name: "需求分析", Description: "梳理需求", SortOrder: 1}},
+			Tasks: []TaskAction{{PhaseName: "需求分析", Title: "需求梳理", Description: "整理需求", Priority: 3}},
+		}
+	case "supervisor":
+		return &AgentTaskOutput{
+			Status:  OutputStatusSuccess,
+			Summary: "契约已创建",
+			Contracts: []ContractAction{{
+				TaskTitle:          sample.Input.Task.Title,
+				Scope:              "完成任务范围",
+				NonGoals:           []string{"不做无关扩展"},
+				DoneDefinition:     []string{"交付物生成完成", "通过基础质量检查"},
+				VerificationSteps:  []string{"执行验证"},
+				AcceptanceCriteria: []string{"满足任务要求"},
+			}},
+			Assignments: []AssignmentAction{{TaskTitle: sample.Input.Task.Title, AgentRole: "worker", Role: "executor", Note: "执行任务"}},
+			Transitions: []TransitionAction{{TaskTitle: sample.Input.Task.Title, NewStatus: "assigned"}},
+		}
+	case "worker":
+		return &AgentTaskOutput{
+			Status:  OutputStatusNeedsReview,
+			Summary: "工件已产出",
+			Artifacts: []ArtifactAction{{
+				Name:         "user_register_handler.go",
+				ArtifactType: "source_code",
+				Description:  "注册接口实现",
+				URI:          "artifact://eval/user_register_handler.go",
+				ContentType:  "text/x-go",
+				SizeBytes:    24,
+				Content:      "package handler\nfunc Register() {}",
+			}},
+			Handoffs:    []HandoffAction{{Summary: "交接完成", CompletedItems: []string{"代码已提交"}, PendingItems: []string{"等待评审"}, Risks: []string{"需继续补充测试"}, NextSteps: []string{"提交评审"}}},
+			Transitions: []TransitionAction{{TaskTitle: sample.Input.Task.Title, NewStatus: "in_review"}},
+		}
+	case "reviewer":
+		return &AgentTaskOutput{
+			Status:  OutputStatusSuccess,
+			Summary: "评审完成",
+			Reviews: []ReviewAction{{Verdict: "approved", Summary: "实现合理", Findings: []string{"接口边界清晰", "工件与任务一致"}, Recommendations: []string{"补充更多测试覆盖"}}},
+		}
+	default:
+		return &AgentTaskOutput{Status: OutputStatusSuccess, Summary: "ok"}
 	}
 }

@@ -1,7 +1,7 @@
 package runtime
 
 // AgentRunner is the interface that all agent implementations must satisfy.
-// Mock agents implement this for MVP; future agents will wrap LLM calls.
+// Production LLM runners and test-only deterministic stubs both implement this interface.
 type AgentRunner interface {
 	Execute(input *AgentTaskInput) (*AgentTaskOutput, error)
 	Role() string

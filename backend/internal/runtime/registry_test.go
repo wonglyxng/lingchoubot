@@ -2,9 +2,28 @@ package runtime
 
 import "testing"
 
+type registryTestRunner struct {
+	role   string
+	spec   string
+	output *AgentTaskOutput
+}
+
+func (r *registryTestRunner) Role() string { return r.role }
+
+func (r *registryTestRunner) Execute(input *AgentTaskInput) (*AgentTaskOutput, error) {
+	if r.output != nil {
+		return r.output, nil
+	}
+	return &AgentTaskOutput{Status: OutputStatusSuccess, Summary: "ok"}, nil
+}
+
 func TestRegistryGetForSpec(t *testing.T) {
 	reg := NewRegistry()
-	reg.RegisterDefaults()
+	reg.Register("pm", &registryTestRunner{role: "pm"})
+	reg.Register("worker", &registryTestRunner{role: "worker"})
+	reg.RegisterSpecialized("worker", "backend", &registryTestRunner{role: "worker", spec: "backend"})
+	reg.RegisterSpecialized("worker", "frontend", &registryTestRunner{role: "worker", spec: "frontend"})
+	reg.RegisterSpecialized("worker", "qa", &registryTestRunner{role: "worker", spec: "qa"})
 
 	tests := []struct {
 		name    string
@@ -44,7 +63,18 @@ func TestRegistryGetForSpec(t *testing.T) {
 
 func TestRegistrySpecializedRunnerOutput(t *testing.T) {
 	reg := NewRegistry()
-	reg.RegisterDefaults()
+	reg.RegisterSpecialized("worker", "backend", &registryTestRunner{role: "worker", spec: "backend", output: &AgentTaskOutput{
+		Status: OutputStatusNeedsReview,
+		Artifacts: []ArtifactAction{{ArtifactType: "source_code", ContentType: "text/x-go", Content: "package main"}},
+	}})
+	reg.RegisterSpecialized("worker", "frontend", &registryTestRunner{role: "worker", spec: "frontend", output: &AgentTaskOutput{
+		Status: OutputStatusNeedsReview,
+		Artifacts: []ArtifactAction{{ArtifactType: "source_code", ContentType: "text/typescript", Content: "export default function Demo() {}"}},
+	}})
+	reg.RegisterSpecialized("worker", "qa", &registryTestRunner{role: "worker", spec: "qa", output: &AgentTaskOutput{
+		Status: OutputStatusNeedsReview,
+		Artifacts: []ArtifactAction{{ArtifactType: "test_report", ContentType: "text/markdown", Content: "# QA"}},
+	}})
 
 	input := &AgentTaskInput{
 		RunID:     "test-run",

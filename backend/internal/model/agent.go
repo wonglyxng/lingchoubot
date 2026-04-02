@@ -21,7 +21,6 @@ const (
 type AgentType string
 
 const (
-	AgentTypeMock  AgentType = "mock"
 	AgentTypeLLM   AgentType = "llm"
 	AgentTypeHuman AgentType = "human"
 )

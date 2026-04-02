@@ -7,7 +7,6 @@ func TestAgentTypeConstants(t *testing.T) {
 		at   AgentType
 		want string
 	}{
-		{AgentTypeMock, "mock"},
 		{AgentTypeLLM, "llm"},
 		{AgentTypeHuman, "human"},
 	}

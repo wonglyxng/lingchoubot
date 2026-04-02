@@ -135,7 +135,7 @@ func reviewerEvalSample() EvalSample {
 				{
 					ID:           "eval-art-001",
 					Name:         "user_register_handler.go",
-					ArtifactType: "code",
+					ArtifactType: "source_code",
 					VersionURI:   "artifact://eval-proj-001/user_register_handler.go",
 				},
 			},
