@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/lingchou/lingchoubot/backend/internal/model"
@@ -70,12 +71,26 @@ func (s *ReviewReportService) Create(ctx context.Context, rr *model.ReviewReport
 		if s.approvalSvc != nil {
 			task, _ := s.taskSvc.GetByID(ctx, rr.TaskID)
 			if task != nil {
+				metadata := map[string]string{}
+				if rr.RunID != nil {
+					metadata["run_id"] = *rr.RunID
+				}
+				if task.PhaseID != nil {
+					metadata["phase_id"] = *task.PhaseID
+				}
+				metaJSON := model.JSON("{}")
+				if len(metadata) > 0 {
+					if b, err := json.Marshal(metadata); err == nil {
+						metaJSON = model.JSON(b)
+					}
+				}
 				ar := &model.ApprovalRequest{
 					ProjectID:   task.ProjectID,
 					TaskID:      &rr.TaskID,
 					RequestedBy: rr.ReviewerID,
 					Title:       fmt.Sprintf("任务「%s」评审通过，请审批", task.Title),
 					Description: fmt.Sprintf("评审报告 %s 结论为通过，等待审批确认", rr.ID),
+					Metadata:    metaJSON,
 				}
 				if err := s.approvalSvc.Create(ctx, ar); err != nil {
 					return fmt.Errorf("auto-create approval request: %w", err)

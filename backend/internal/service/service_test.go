@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -70,9 +71,20 @@ func (r *fakeTaskRepo) GetByID(_ context.Context, id string) (*model.Task, error
 	return &copyTask, nil
 }
 
-func (r *fakeTaskRepo) List(_ context.Context, _ repository.TaskListParams) ([]*model.Task, int, error) {
+func (r *fakeTaskRepo) List(_ context.Context, p repository.TaskListParams) ([]*model.Task, int, error) {
 	items := make([]*model.Task, 0, len(r.tasks))
 	for _, task := range r.tasks {
+		if p.ProjectID != "" && task.ProjectID != p.ProjectID {
+			continue
+		}
+		if p.PhaseID != "" {
+			if task.PhaseID == nil || *task.PhaseID != p.PhaseID {
+				continue
+			}
+		}
+		if p.Status != "" && string(task.Status) != p.Status {
+			continue
+		}
 		copyTask := *task
 		items = append(items, &copyTask)
 	}
@@ -166,6 +178,18 @@ type fakeWorkflowRunRepo struct {
 	createCalls       int
 	updateStatusCalls int
 	lastUpdatedRun    *model.WorkflowRun
+}
+
+type fakeWorkflowResumer struct {
+	resumeCalls int
+	lastRunID   string
+	err         error
+}
+
+func (r *fakeWorkflowResumer) ResumeRun(_ context.Context, id string) error {
+	r.resumeCalls++
+	r.lastRunID = id
+	return r.err
 }
 
 type fakeReviewRepo struct {
@@ -431,9 +455,104 @@ func TestApprovalRequestServiceDecideTransitionsTask(t *testing.T) {
 	}
 }
 
+func TestApprovalRequestServiceDecideResumesWorkflowWhenPhaseUnlocked(t *testing.T) {
+	ctx := context.Background()
+	auditSvc, _ := newTestAuditService()
+	phaseID := "phase-1"
+	taskID := "task-1"
+	taskRepo := &fakeTaskRepo{
+		tasks: map[string]*model.Task{
+			taskID: {
+				ID:        taskID,
+				Title:     "需求文档编写",
+				Status:    model.TaskStatusPendingApproval,
+				ProjectID: "proj-1",
+				PhaseID:   &phaseID,
+			},
+		},
+	}
+	approvalRepo := &fakeApprovalRepo{
+		approvals: map[string]*model.ApprovalRequest{
+			"approval-1": {
+				ID:          "approval-1",
+				ProjectID:   "proj-1",
+				TaskID:      &taskID,
+				RequestedBy: "reviewer-1",
+				Title:       "审批需求文档",
+				Status:      model.ApprovalStatusPending,
+				Metadata:    model.JSON(`{"run_id":"run-1"}`),
+			},
+		},
+	}
+	resumer := &fakeWorkflowResumer{}
+	taskSvc := &TaskService{repo: taskRepo, audit: auditSvc}
+	svc := &ApprovalRequestService{repo: approvalRepo, taskSvc: taskSvc, audit: auditSvc, resumer: resumer}
+
+	if err := svc.Decide(ctx, "approval-1", model.ApprovalStatusApproved, "ok"); err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if resumer.resumeCalls != 1 {
+		t.Fatalf("expected 1 resume call, got %d", resumer.resumeCalls)
+	}
+	if resumer.lastRunID != "run-1" {
+		t.Fatalf("expected resumed run run-1, got %q", resumer.lastRunID)
+	}
+}
+
+func TestApprovalRequestServiceDecideDoesNotResumeWhilePhaseStillPending(t *testing.T) {
+	ctx := context.Background()
+	auditSvc, _ := newTestAuditService()
+	phaseID := "phase-1"
+	taskID := "task-1"
+	otherTaskID := "task-2"
+	taskRepo := &fakeTaskRepo{
+		tasks: map[string]*model.Task{
+			taskID: {
+				ID:        taskID,
+				Title:     "需求文档编写",
+				Status:    model.TaskStatusPendingApproval,
+				ProjectID: "proj-1",
+				PhaseID:   &phaseID,
+			},
+			otherTaskID: {
+				ID:        otherTaskID,
+				Title:     "可行性评估",
+				Status:    model.TaskStatusPendingApproval,
+				ProjectID: "proj-1",
+				PhaseID:   &phaseID,
+			},
+		},
+	}
+	approvalRepo := &fakeApprovalRepo{
+		approvals: map[string]*model.ApprovalRequest{
+			"approval-1": {
+				ID:          "approval-1",
+				ProjectID:   "proj-1",
+				TaskID:      &taskID,
+				RequestedBy: "reviewer-1",
+				Title:       "审批需求文档",
+				Status:      model.ApprovalStatusPending,
+				Metadata:    model.JSON(`{"run_id":"run-1"}`),
+			},
+		},
+	}
+	resumer := &fakeWorkflowResumer{}
+	taskSvc := &TaskService{repo: taskRepo, audit: auditSvc}
+	svc := &ApprovalRequestService{repo: approvalRepo, taskSvc: taskSvc, audit: auditSvc, resumer: resumer}
+
+	if err := svc.Decide(ctx, "approval-1", model.ApprovalStatusApproved, "ok"); err != nil {
+		t.Fatalf("Decide returned error: %v", err)
+	}
+	if resumer.resumeCalls != 0 {
+		t.Fatalf("expected 0 resume calls, got %d", resumer.resumeCalls)
+	}
+}
+
 func TestReviewReportApprovedCreatesApprovalAndTransitionsTask(t *testing.T) {
 	ctx := context.Background()
 	auditSvc, _ := newTestAuditService()
+	phaseID := "phase-1"
+	runID := "run-1"
 	taskRepo := &fakeTaskRepo{
 		tasks: map[string]*model.Task{
 			"task-1": {
@@ -441,6 +560,7 @@ func TestReviewReportApprovedCreatesApprovalAndTransitionsTask(t *testing.T) {
 				Title:     "API 设计",
 				Status:    model.TaskStatusInReview,
 				ProjectID: "proj-1",
+				PhaseID:   &phaseID,
 			},
 		},
 	}
@@ -451,6 +571,7 @@ func TestReviewReportApprovedCreatesApprovalAndTransitionsTask(t *testing.T) {
 	reviewSvc := &ReviewReportService{repo: reviewRepo, taskSvc: taskSvc, approvalSvc: approvalSvc, audit: auditSvc}
 
 	rr := &model.ReviewReport{
+		RunID:      &runID,
 		TaskID:     "task-1",
 		ReviewerID: "reviewer-1",
 		Verdict:    model.ReviewVerdictApproved,
@@ -474,6 +595,19 @@ func TestReviewReportApprovedCreatesApprovalAndTransitionsTask(t *testing.T) {
 		}
 		if ar.ProjectID != "proj-1" {
 			t.Fatalf("approval request project_id = %q, want %q", ar.ProjectID, "proj-1")
+		}
+		var meta struct {
+			RunID   string `json:"run_id"`
+			PhaseID string `json:"phase_id"`
+		}
+		if err := json.Unmarshal(ar.Metadata, &meta); err != nil {
+			t.Fatalf("unmarshal approval metadata: %v", err)
+		}
+		if meta.RunID != runID {
+			t.Fatalf("approval metadata run_id = %q, want %q", meta.RunID, runID)
+		}
+		if meta.PhaseID != phaseID {
+			t.Fatalf("approval metadata phase_id = %q, want %q", meta.PhaseID, phaseID)
 		}
 	}
 }
@@ -556,6 +690,23 @@ func TestWorkflowServiceRunLifecycle(t *testing.T) {
 	}
 	if runRepo.lastUpdatedRun.Error != "boom" {
 		t.Fatalf("expected run error %q, got %q", "boom", runRepo.lastUpdatedRun.Error)
+	}
+
+	run3, err := svc.CreateRun(ctx, "proj-3")
+	if err != nil {
+		t.Fatalf("CreateRun third run returned error: %v", err)
+	}
+	if err := svc.WaitForApproval(ctx, run3, "waiting"); err != nil {
+		t.Fatalf("WaitForApproval returned error: %v", err)
+	}
+	if runRepo.lastUpdatedRun == nil || runRepo.lastUpdatedRun.Status != model.WorkflowRunWaitingApproval {
+		t.Fatalf("expected updated run status %q, got %#v", model.WorkflowRunWaitingApproval, runRepo.lastUpdatedRun)
+	}
+	if err := svc.ResumeRun(ctx, run3, "resumed"); err != nil {
+		t.Fatalf("ResumeRun returned error: %v", err)
+	}
+	if runRepo.lastUpdatedRun == nil || runRepo.lastUpdatedRun.Status != model.WorkflowRunRunning {
+		t.Fatalf("expected updated run status %q, got %#v", model.WorkflowRunRunning, runRepo.lastUpdatedRun)
 	}
 }
 

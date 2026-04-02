@@ -38,8 +38,8 @@ func TestIntegration_HappyPath(t *testing.T) {
 	}
 
 	// ---- Verify WorkflowRun ----
-	if run.Status != model.WorkflowRunCompleted {
-		t.Errorf("run status = %q, want %q", run.Status, model.WorkflowRunCompleted)
+	if run.Status != model.WorkflowRunWaitingApproval {
+		t.Errorf("run status = %q, want %q", run.Status, model.WorkflowRunWaitingApproval)
 	}
 
 	// ---- Verify Phases ----
@@ -56,31 +56,73 @@ func TestIntegration_HappyPath(t *testing.T) {
 		t.Fatalf("tasks = %d, want 9", len(allTasks))
 	}
 
-	// Every task should have been reviewed and advanced to pending_approval (since mock reviewer approves)
-	for _, task := range allTasks {
+	phaseByName := make(map[string]*model.Phase, len(phases))
+	for _, phase := range phases {
+		phaseByName[phase.Name] = phase
+	}
+	analysisPhase := phaseByName["需求分析"]
+	if analysisPhase == nil {
+		t.Fatal("需求分析阶段不存在")
+	}
+	designPhase := phaseByName["方案设计"]
+	if designPhase == nil {
+		t.Fatal("方案设计阶段不存在")
+	}
+	if analysisPhase.Status != model.PhaseStatusActive {
+		t.Fatalf("analysis phase status = %q, want %q", analysisPhase.Status, model.PhaseStatusActive)
+	}
+	if designPhase.Status != model.PhaseStatusPending {
+		t.Fatalf("design phase status = %q, want %q", designPhase.Status, model.PhaseStatusPending)
+	}
+
+	analysisTasks, _, _ := f.TaskSvc.List(ctx, repository.TaskListParams{PhaseID: analysisPhase.ID, Limit: 100})
+	if len(analysisTasks) != 2 {
+		t.Fatalf("analysis tasks = %d, want 2", len(analysisTasks))
+	}
+	for _, task := range analysisTasks {
 		if task.Status != model.TaskStatusPendingApproval {
-			t.Errorf("task %q status = %q, want %q", task.Title, task.Status, model.TaskStatusPendingApproval)
+			t.Errorf("analysis task %q status = %q, want %q", task.Title, task.Status, model.TaskStatusPendingApproval)
+		}
+	}
+
+	designTasks, _, _ := f.TaskSvc.List(ctx, repository.TaskListParams{PhaseID: designPhase.ID, Limit: 100})
+	if len(designTasks) != 3 {
+		t.Fatalf("design tasks = %d, want 3", len(designTasks))
+	}
+	for _, task := range designTasks {
+		if task.Status != model.TaskStatusPending {
+			t.Errorf("design task %q status = %q, want %q", task.Title, task.Status, model.TaskStatusPending)
+		}
+	}
+
+	// Only the first phase should have been reviewed and advanced to pending_approval.
+	for _, task := range allTasks {
+		if task.PhaseID == nil || *task.PhaseID == analysisPhase.ID {
+			continue
+		}
+		if task.Status != model.TaskStatusPending {
+			t.Errorf("downstream task %q status = %q, want %q", task.Title, task.Status, model.TaskStatusPending)
 		}
 	}
 
 	// ---- Verify Artifacts ----
 	artCount := f.ArtifactRepo.CountByProject(proj.ID)
-	if artCount != 9 {
-		t.Errorf("artifacts = %d, want 9", artCount)
+	if artCount != 2 {
+		t.Errorf("artifacts = %d, want 2", artCount)
 	}
 	verCount := f.ArtifactVersionRepo.TotalCount()
-	if verCount != 9 {
-		t.Errorf("artifact versions = %d, want 9", verCount)
+	if verCount != 2 {
+		t.Errorf("artifact versions = %d, want 2", verCount)
 	}
 
 	// ---- Verify Reviews ----
 	reviewCount := f.ReviewRepo.TotalCount()
-	if reviewCount != 9 {
-		t.Errorf("reviews = %d, want 9", reviewCount)
+	if reviewCount != 2 {
+		t.Errorf("reviews = %d, want 2", reviewCount)
 	}
 	reviews, total, _ := f.ReviewRepo.List(ctx, repository.ReviewListParams{RunID: run.ID, Limit: 100, Offset: 0})
-	if total != 9 {
-		t.Errorf("reviews for run = %d, want 9", total)
+	if total != 2 {
+		t.Errorf("reviews for run = %d, want 2", total)
 	}
 	for _, review := range reviews {
 		if review.RunID == nil || *review.RunID != run.ID {
@@ -89,10 +131,10 @@ func TestIntegration_HappyPath(t *testing.T) {
 	}
 
 	// ---- Verify Workflow Steps ----
-	// 1 PM step + 9*(supervisor+worker+reviewer) = 1 + 27 = 28
+	// 1 PM step + 2*(supervisor+worker+reviewer) = 7
 	steps := f.WorkflowStepRepo.StepsForRun(run.ID)
-	if len(steps) != 28 {
-		t.Errorf("workflow steps = %d, want 28", len(steps))
+	if len(steps) != 7 {
+		t.Errorf("workflow steps = %d, want 7", len(steps))
 	}
 	// All steps should be completed
 	for _, step := range steps {
@@ -107,11 +149,14 @@ func TestIntegration_HappyPath(t *testing.T) {
 		t.Errorf("audit entries = %d, expected at least 10", len(entries))
 	}
 
-	// Check for workflow.started and workflow.completed events
-	hasStarted, hasCompleted := false, false
+	// Check for workflow.started and workflow.waiting_approval events
+	hasStarted, hasWaiting, hasCompleted := false, false, false
 	for _, e := range entries {
 		if e.EventType == "workflow.started" {
 			hasStarted = true
+		}
+		if e.EventType == "workflow.waiting_approval" {
+			hasWaiting = true
 		}
 		if e.EventType == "workflow.completed" {
 			hasCompleted = true
@@ -120,8 +165,11 @@ func TestIntegration_HappyPath(t *testing.T) {
 	if !hasStarted {
 		t.Error("missing workflow.started audit event")
 	}
-	if !hasCompleted {
-		t.Error("missing workflow.completed audit event")
+	if !hasWaiting {
+		t.Error("missing workflow.waiting_approval audit event")
+	}
+	if hasCompleted {
+		t.Error("unexpected workflow.completed audit event")
 	}
 }
 
@@ -256,26 +304,26 @@ func TestIntegration_ReworkPath(t *testing.T) {
 		t.Fatalf("Engine.Run: %v", err)
 	}
 
-	if run.Status != model.WorkflowRunCompleted {
-		t.Errorf("run status = %q, want %q", run.Status, model.WorkflowRunCompleted)
+	if run.Status != model.WorkflowRunWaitingApproval {
+		t.Errorf("run status = %q, want %q", run.Status, model.WorkflowRunWaitingApproval)
 	}
 
-	// Each task should have 2 reviews (1 reject + 1 approve)
+	// First phase has 2 tasks; each task should have 2 reviews (1 reject + 1 approve)
 	reviewCount := f.ReviewRepo.TotalCount()
-	if reviewCount != 18 { // 9 tasks * 2 reviews each
-		t.Errorf("reviews = %d, want 18", reviewCount)
+	if reviewCount != 4 {
+		t.Errorf("reviews = %d, want 4", reviewCount)
 	}
 
-	// Each task should have 2 artifacts (1 per worker execution)
+	// Each executed task should have 2 artifacts (1 per worker execution)
 	artCount := f.ArtifactRepo.CountByProject(proj.ID)
-	if artCount != 18 { // 9 tasks * 2 worker runs
-		t.Errorf("artifacts = %d, want 18", artCount)
+	if artCount != 4 {
+		t.Errorf("artifacts = %d, want 4", artCount)
 	}
 
 	// Verify reviewer was called the expected number of times
 	totalCalls := reviewer.totalCalls.Load()
-	if totalCalls != 18 { // 9 first-pass rejects + 9 second-pass approves
-		t.Errorf("reviewer calls = %d, want 18", totalCalls)
+	if totalCalls != 4 {
+		t.Errorf("reviewer calls = %d, want 4", totalCalls)
 	}
 
 	// Check for rework audit events
@@ -285,14 +333,14 @@ func TestIntegration_ReworkPath(t *testing.T) {
 			reworkCount++
 		}
 	}
-	if reworkCount != 9 {
-		t.Errorf("rework events = %d, want 9", reworkCount)
+	if reworkCount != 2 {
+		t.Errorf("rework events = %d, want 2", reworkCount)
 	}
 
-	// Steps: PM(1) + 9 tasks * (supervisor + worker + reviewer + worker + reviewer) = 1 + 45 = 46
+	// Steps: PM(1) + 2 tasks * (supervisor + worker + reviewer + worker + reviewer) = 11
 	steps := f.WorkflowStepRepo.StepsForRun(run.ID)
-	if len(steps) != 46 {
-		t.Errorf("workflow steps = %d, want 46", len(steps))
+	if len(steps) != 11 {
+		t.Errorf("workflow steps = %d, want 11", len(steps))
 	}
 }
 
@@ -374,10 +422,10 @@ func TestIntegration_AuditLogCoverage(t *testing.T) {
 		eventTypes[e.EventType]++
 	}
 
-	// These event types should be present in a happy-path run
+	// These event types should be present in a gated first-phase run
 	required := []string{
 		"workflow.started",
-		"workflow.completed",
+		"workflow.waiting_approval",
 		"project.created",
 		"phase.created",
 		"task.created",
@@ -422,12 +470,12 @@ func TestIntegration_ArtifactVersioning(t *testing.T) {
 	artCount := f.ArtifactRepo.CountByProject(proj.ID)
 	verCount := f.ArtifactVersionRepo.TotalCount()
 
-	// 9 tasks * 2 worker runs = 18 artifacts, 18 versions
-	if artCount != 18 {
-		t.Errorf("artifacts = %d, want 18", artCount)
+	// First phase has 2 tasks; each task runs worker twice = 4 artifacts, 4 versions
+	if artCount != 4 {
+		t.Errorf("artifacts = %d, want 4", artCount)
 	}
-	if verCount != 18 {
-		t.Errorf("artifact versions = %d, want 18", verCount)
+	if verCount != 4 {
+		t.Errorf("artifact versions = %d, want 4", verCount)
 	}
 }
 

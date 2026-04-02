@@ -185,6 +185,7 @@ func TestWorkflowRunStatusConstants(t *testing.T) {
 	}{
 		{model.WorkflowRunPending, "pending"},
 		{model.WorkflowRunRunning, "running"},
+		{model.WorkflowRunWaitingApproval, "waiting_approval"},
 		{model.WorkflowRunCompleted, "completed"},
 		{model.WorkflowRunFailed, "failed"},
 		{model.WorkflowRunCancelled, "cancelled"},

@@ -9,6 +9,7 @@ func TestWorkflowRunStatusConstants(t *testing.T) {
 	}{
 		{WorkflowRunPending, "pending"},
 		{WorkflowRunRunning, "running"},
+		{WorkflowRunWaitingApproval, "waiting_approval"},
 		{WorkflowRunCompleted, "completed"},
 		{WorkflowRunFailed, "failed"},
 	}

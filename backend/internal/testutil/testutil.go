@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -138,6 +139,12 @@ func (r *FakePhaseRepo) ListByProject(_ context.Context, projectID string) ([]*m
 			result = append(result, &cp)
 		}
 	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].SortOrder == result[j].SortOrder {
+			return result[i].CreatedAt.Before(result[j].CreatedAt)
+		}
+		return result[i].SortOrder < result[j].SortOrder
+	})
 	return result, nil
 }
 func (r *FakePhaseRepo) Update(_ context.Context, p *model.Phase) error {
@@ -1130,6 +1137,7 @@ func NewFixture() *Fixture {
 		Audit:      auditSvc,
 	}
 	engine := orchestrator.NewEngine(reg, svc, workflowSvc, logger)
+	approvalSvc.SetWorkflowResumer(engine)
 
 	return &Fixture{
 		ProjectRepo:         projectRepo,

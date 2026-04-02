@@ -207,6 +207,7 @@ func main() {
 		}
 	} else {
 		engine := orchestrator.NewEngine(reg, orchServices, workflowSvc, logger)
+		approvalSvc.SetWorkflowResumer(engine)
 		workflowEngine = engine
 		logger.Info("local workflow engine active")
 	}

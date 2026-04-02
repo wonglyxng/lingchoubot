@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -32,6 +33,8 @@ type runCtx struct {
 	run       *model.WorkflowRun
 	stepCount int
 }
+
+var errPhaseWaitingApproval = errors.New("phase waiting approval")
 
 func (rc *runCtx) nextOrder() int {
 	rc.stepCount++
@@ -77,6 +80,49 @@ func (e *Engine) CancelRun(ctx context.Context, id string) error {
 	return e.workflow.CancelRun(ctx, run)
 }
 
+// ResumeRun continues a workflow that is currently waiting for approvals.
+func (e *Engine) ResumeRun(ctx context.Context, id string) error {
+	run, err := e.workflow.GetRun(ctx, id)
+	if err != nil {
+		return fmt.Errorf("get run: %w", err)
+	}
+	if run == nil {
+		return fmt.Errorf("run %s not found", id)
+	}
+	if run.Status != model.WorkflowRunWaitingApproval {
+		return fmt.Errorf("run %s is not waiting for approval (status=%s)", id, run.Status)
+	}
+
+	proj, err := e.services.Project.GetByID(ctx, run.ProjectID)
+	if err != nil {
+		return fmt.Errorf("load project: %w", err)
+	}
+	if proj == nil {
+		return fmt.Errorf("project %s not found", run.ProjectID)
+	}
+
+	if err := e.workflow.ResumeRun(ctx, run, fmt.Sprintf("项目「%s」审批已收口，工作流继续执行", proj.Name)); err != nil {
+		return fmt.Errorf("resume workflow run: %w", err)
+	}
+	e.services.Audit.LogEvent(ctx, "system", "", "workflow.resumed",
+		fmt.Sprintf("项目「%s」工作流已恢复执行", proj.Name),
+		"project", proj.ID, nil, map[string]string{"run_id": run.ID})
+
+	stepCount := len(run.Steps)
+	go func() {
+		bgCtx := context.Background()
+		rc := &runCtx{run: run, stepCount: stepCount}
+		if err := e.continueRun(bgCtx, rc, proj); err != nil {
+			if errors.Is(err, errPhaseWaitingApproval) {
+				return
+			}
+			e.failRun(bgCtx, rc, err)
+		}
+	}()
+
+	return nil
+}
+
 // Run executes the full workflow for a project: PM → Supervisor → Worker → Reviewer.
 // This is a synchronous call — use RunAsync for non-blocking execution.
 func (e *Engine) Run(ctx context.Context, projectID string) (*model.WorkflowRun, error) {
@@ -100,27 +146,12 @@ func (e *Engine) Run(ctx context.Context, projectID string) (*model.WorkflowRun,
 		return e.workflow.GetRun(ctx, run.ID)
 	}
 
-	phases, err := e.services.Phase.ListByProject(ctx, proj.ID)
-	if err != nil {
-		e.failRun(ctx, rc, err)
+	if err := e.continueRun(ctx, rc, proj); err != nil {
+		if !errors.Is(err, errPhaseWaitingApproval) {
+			e.failRun(ctx, rc, err)
+		}
 		return e.workflow.GetRun(ctx, run.ID)
 	}
-
-	for _, phase := range phases {
-		if err := e.runPhase(ctx, rc, proj, phase); err != nil {
-			e.failRun(ctx, rc, err)
-			return e.workflow.GetRun(ctx, run.ID)
-		}
-	}
-
-	summary := fmt.Sprintf("项目「%s」工作流完成：%d 个阶段已处理，共 %d 步",
-		proj.Name, len(phases), rc.stepCount)
-	if err := e.workflow.CompleteRun(ctx, run, summary); err != nil {
-		e.logger.Error("complete run failed", "error", err)
-	}
-
-	e.services.Audit.LogEvent(ctx, "system", "", "workflow.completed",
-		summary, "project", proj.ID, nil, map[string]string{"run_id": run.ID})
 
 	return e.workflow.GetRun(ctx, run.ID)
 }
@@ -152,30 +183,74 @@ func (e *Engine) RunAsync(ctx context.Context, projectID string) (*model.Workflo
 			return
 		}
 
-		phases, err := e.services.Phase.ListByProject(bgCtx, proj.ID)
-		if err != nil {
+		if err := e.continueRun(bgCtx, rc, proj); err != nil {
+			if errors.Is(err, errPhaseWaitingApproval) {
+				return
+			}
 			e.failRun(bgCtx, rc, err)
 			return
 		}
-
-		for _, phase := range phases {
-			if err := e.runPhase(bgCtx, rc, proj, phase); err != nil {
-				e.failRun(bgCtx, rc, err)
-				return
-			}
-		}
-
-		summary := fmt.Sprintf("项目「%s」工作流完成：%d 个阶段已处理，共 %d 步",
-			proj.Name, len(phases), rc.stepCount)
-		if err := e.workflow.CompleteRun(bgCtx, run, summary); err != nil {
-			e.logger.Error("complete run failed", "error", err)
-		}
-
-		e.services.Audit.LogEvent(bgCtx, "system", "", "workflow.completed",
-			summary, "project", proj.ID, nil, map[string]string{"run_id": run.ID})
 	}()
 
 	return run, nil
+}
+
+func (e *Engine) continueRun(ctx context.Context, rc *runCtx, proj *model.Project) error {
+	phases, err := e.services.Phase.ListByProject(ctx, proj.ID)
+	if err != nil {
+		return err
+	}
+
+	for _, phase := range phases {
+		tasks, _, err := e.services.Task.List(ctx, repository.TaskListParams{
+			PhaseID: phase.ID,
+			Limit:   100,
+			Offset:  0,
+		})
+		if err != nil {
+			return err
+		}
+		if len(tasks) == 0 {
+			if err := e.setPhaseStatus(ctx, phase, model.PhaseStatusCompleted); err != nil {
+				return err
+			}
+			continue
+		}
+		if phaseTasksCompleted(tasks) {
+			if err := e.setPhaseStatus(ctx, phase, model.PhaseStatusCompleted); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := e.setPhaseStatus(ctx, phase, model.PhaseStatusActive); err != nil {
+			return err
+		}
+		if err := e.runPhase(ctx, rc, proj, phase); err != nil {
+			if errors.Is(err, errPhaseWaitingApproval) {
+				summary := fmt.Sprintf("项目「%s」当前停在阶段「%s」，等待审批收口后继续", proj.Name, phase.Name)
+				if waitErr := e.workflow.WaitForApproval(ctx, rc.run, summary); waitErr != nil {
+					return fmt.Errorf("mark run waiting approval: %w", waitErr)
+				}
+				e.services.Audit.LogEvent(ctx, "system", "", "workflow.waiting_approval",
+					summary, "project", proj.ID, nil, map[string]string{"run_id": rc.run.ID, "phase_id": phase.ID})
+				return err
+			}
+			return err
+		}
+		if err := e.setPhaseStatus(ctx, phase, model.PhaseStatusCompleted); err != nil {
+			return err
+		}
+	}
+
+	summary := fmt.Sprintf("项目「%s」工作流完成：%d 个阶段已处理，共 %d 步",
+		proj.Name, len(phases), rc.stepCount)
+	if err := e.workflow.CompleteRun(ctx, rc.run, summary); err != nil {
+		e.logger.Error("complete run failed", "error", err)
+	}
+	e.services.Audit.LogEvent(ctx, "system", "", "workflow.completed",
+		summary, "project", proj.ID, nil, map[string]string{"run_id": rc.run.ID})
+	return nil
 }
 
 // runPMPhase runs the PM agent to decompose the project.
@@ -258,13 +333,58 @@ func (e *Engine) runPhase(ctx context.Context, rc *runCtx, proj *model.Project, 
 		return nil
 	}
 
+	waitingApproval := false
+
 	for _, task := range tasks {
+		if task.Status == model.TaskStatusCompleted {
+			continue
+		}
+		if task.Status == model.TaskStatusPendingApproval {
+			waitingApproval = true
+			continue
+		}
 		if err := e.runTaskChain(ctx, rc, proj, phase, task); err != nil {
 			e.logger.Error("task chain failed", "task", task.Title, "error", err)
 			return err
 		}
+		fresh, err := e.services.Task.GetByID(ctx, task.ID)
+		if err != nil {
+			return fmt.Errorf("reload task after phase execution: %w", err)
+		}
+		if fresh != nil && fresh.Status == model.TaskStatusPendingApproval {
+			waitingApproval = true
+		}
+	}
+	if waitingApproval {
+		return errPhaseWaitingApproval
 	}
 	return nil
+}
+
+func (e *Engine) setPhaseStatus(ctx context.Context, phase *model.Phase, status model.PhaseStatus) error {
+	if phase.Status == status {
+		return nil
+	}
+	updated := *phase
+	updated.Status = status
+	if err := e.services.Phase.Update(ctx, &updated); err != nil {
+		return fmt.Errorf("update phase %s status to %s: %w", phase.ID, status, err)
+	}
+	phase.Status = status
+	phase.UpdatedAt = updated.UpdatedAt
+	return nil
+}
+
+func phaseTasksCompleted(tasks []*model.Task) bool {
+	if len(tasks) == 0 {
+		return true
+	}
+	for _, task := range tasks {
+		if task.Status != model.TaskStatusCompleted {
+			return false
+		}
+	}
+	return true
 }
 
 // runTaskChain executes Supervisor → Worker → Reviewer for a single task.

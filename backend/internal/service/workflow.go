@@ -59,7 +59,26 @@ func (s *WorkflowService) CompleteRun(ctx context.Context, run *model.WorkflowRu
 	now := time.Now()
 	run.Status = model.WorkflowRunCompleted
 	run.Summary = summary
+	run.Error = ""
 	run.CompletedAt = &now
+	return s.runRepo.UpdateStatus(ctx, run)
+}
+
+// WaitForApproval marks a run as waiting for human approval before it can continue.
+func (s *WorkflowService) WaitForApproval(ctx context.Context, run *model.WorkflowRun, summary string) error {
+	run.Status = model.WorkflowRunWaitingApproval
+	run.Summary = summary
+	run.Error = ""
+	run.CompletedAt = nil
+	return s.runRepo.UpdateStatus(ctx, run)
+}
+
+// ResumeRun marks a waiting run as running again so execution can continue.
+func (s *WorkflowService) ResumeRun(ctx context.Context, run *model.WorkflowRun, summary string) error {
+	run.Status = model.WorkflowRunRunning
+	run.Summary = summary
+	run.Error = ""
+	run.CompletedAt = nil
 	return s.runRepo.UpdateStatus(ctx, run)
 }
 

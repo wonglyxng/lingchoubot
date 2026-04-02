@@ -2,20 +2,30 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/lingchou/lingchoubot/backend/internal/model"
 	"github.com/lingchou/lingchoubot/backend/internal/repository"
 )
 
+type WorkflowResumer interface {
+	ResumeRun(ctx context.Context, id string) error
+}
+
 type ApprovalRequestService struct {
 	repo    ApprovalRepository
 	taskSvc *TaskService
 	audit   *AuditService
+	resumer WorkflowResumer
 }
 
 func NewApprovalRequestService(repo ApprovalRepository, taskSvc *TaskService, audit *AuditService) *ApprovalRequestService {
 	return &ApprovalRequestService{repo: repo, taskSvc: taskSvc, audit: audit}
+}
+
+func (s *ApprovalRequestService) SetWorkflowResumer(resumer WorkflowResumer) {
+	s.resumer = resumer
 }
 
 func (s *ApprovalRequestService) Create(ctx context.Context, a *model.ApprovalRequest) error {
@@ -91,9 +101,66 @@ func (s *ApprovalRequestService) Decide(ctx context.Context, id string, status m
 		case model.ApprovalStatusRejected:
 			_ = s.taskSvc.TransitionStatus(ctx, *old.TaskID, model.TaskStatusRevisionRequired)
 		}
+		if err := s.resumeWorkflowIfPhaseUnlocked(ctx, old); err != nil {
+			return err
+		}
 	}
 
 	return nil
+}
+
+func (s *ApprovalRequestService) resumeWorkflowIfPhaseUnlocked(ctx context.Context, approval *model.ApprovalRequest) error {
+	if s.resumer == nil || approval == nil || approval.TaskID == nil {
+		return nil
+	}
+
+	task, err := s.taskSvc.GetByID(ctx, *approval.TaskID)
+	if err != nil {
+		return fmt.Errorf("load task for approval continuation: %w", err)
+	}
+	if task == nil || task.PhaseID == nil {
+		return nil
+	}
+
+	tasks, _, err := s.taskSvc.List(ctx, repository.TaskListParams{
+		PhaseID: *task.PhaseID,
+		Limit:   100,
+		Offset:  0,
+	})
+	if err != nil {
+		return fmt.Errorf("list phase tasks for approval continuation: %w", err)
+	}
+	for _, phaseTask := range tasks {
+		if phaseTask.Status == model.TaskStatusPendingApproval {
+			return nil
+		}
+	}
+
+	runID, err := approvalRunID(approval.Metadata)
+	if err != nil {
+		return fmt.Errorf("parse approval metadata: %w", err)
+	}
+	if runID == "" {
+		return nil
+	}
+
+	if err := s.resumer.ResumeRun(ctx, runID); err != nil {
+		return fmt.Errorf("resume workflow run %s: %w", runID, err)
+	}
+	return nil
+}
+
+func approvalRunID(raw model.JSON) (string, error) {
+	if len(raw) == 0 {
+		return "", nil
+	}
+	var meta struct {
+		RunID string `json:"run_id"`
+	}
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return "", err
+	}
+	return meta.RunID, nil
 }
 
 func decisionLabel(s model.ApprovalStatus) string {

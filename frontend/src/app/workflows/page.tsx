@@ -62,6 +62,7 @@ function RunCard({
   const [loadingSteps, setLoadingSteps] = useState(false);
   const st = getWorkflowStatus(run.status);
   const isRunning = run.status === "running" || run.status === "pending";
+  const shouldPoll = isRunning || run.status === "waiting_approval";
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Load steps + poll if running
@@ -83,14 +84,14 @@ function RunCard({
     fetchData();
     setLoadingSteps(false);
 
-    if (isRunning) {
+    if (shouldPoll) {
       pollRef.current = setInterval(fetchData, 2000);
     }
 
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [expanded, run.id, run.status, isRunning, onRunUpdated]);
+  }, [expanded, run.id, run.status, shouldPoll, onRunUpdated]);
 
   return (
     <div className="rounded-lg border border-gray-200 bg-white">
@@ -156,6 +157,11 @@ function RunCard({
           {run.error && (
             <div className="mt-2 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
               错误: {run.error}
+            </div>
+          )}
+          {run.status === "waiting_approval" && (
+            <div className="mt-2 rounded bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              当前运行已在审批关口暂停。同一阶段内任务可并行待批；跨阶段会等待本阶段审批收口后再继续推进。
             </div>
           )}
         </div>
