@@ -36,6 +36,33 @@ type runCtx struct {
 
 var errPhaseWaitingApproval = errors.New("phase waiting approval")
 
+type manualInterventionError struct {
+	agentRole string
+	phaseID   string
+	phaseName string
+	taskID    string
+	taskTitle string
+	reason    string
+}
+
+func (e *manualInterventionError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.reason
+}
+
+func newManualInterventionError(agentRole, phaseID, phaseName, taskID, taskTitle, reason string) error {
+	return &manualInterventionError{
+		agentRole: agentRole,
+		phaseID:   phaseID,
+		phaseName: phaseName,
+		taskID:    taskID,
+		taskTitle: taskTitle,
+		reason:    reason,
+	}
+}
+
 func (rc *runCtx) nextOrder() int {
 	rc.stepCount++
 	return rc.stepCount
@@ -80,7 +107,7 @@ func (e *Engine) CancelRun(ctx context.Context, id string) error {
 	return e.workflow.CancelRun(ctx, run)
 }
 
-// ResumeRun continues a workflow that is currently waiting for approvals.
+// ResumeRun continues a workflow that is currently waiting for approvals or manual intervention.
 func (e *Engine) ResumeRun(ctx context.Context, id string) error {
 	run, err := e.workflow.GetRun(ctx, id)
 	if err != nil {
@@ -89,8 +116,9 @@ func (e *Engine) ResumeRun(ctx context.Context, id string) error {
 	if run == nil {
 		return fmt.Errorf("run %s not found", id)
 	}
-	if run.Status != model.WorkflowRunWaitingApproval {
-		return fmt.Errorf("run %s is not waiting for approval (status=%s)", id, run.Status)
+	previousStatus := run.Status
+	if run.Status != model.WorkflowRunWaitingApproval && run.Status != model.WorkflowRunWaitingManual {
+		return fmt.Errorf("run %s is not resumable (status=%s)", id, run.Status)
 	}
 
 	proj, err := e.services.Project.GetByID(ctx, run.ProjectID)
@@ -101,19 +129,32 @@ func (e *Engine) ResumeRun(ctx context.Context, id string) error {
 		return fmt.Errorf("project %s not found", run.ProjectID)
 	}
 
-	if err := e.workflow.ResumeRun(ctx, run, fmt.Sprintf("项目「%s」审批已收口，工作流继续执行", proj.Name)); err != nil {
+	resumeSummary := fmt.Sprintf("项目「%s」审批已收口，工作流继续执行", proj.Name)
+	if previousStatus == model.WorkflowRunWaitingManual {
+		resumeSummary = fmt.Sprintf("项目「%s」人工介入已处理，工作流继续执行", proj.Name)
+	}
+	if err := e.workflow.ResumeRun(ctx, run, resumeSummary); err != nil {
 		return fmt.Errorf("resume workflow run: %w", err)
 	}
 	e.services.Audit.LogEvent(ctx, "system", "", "workflow.resumed",
 		fmt.Sprintf("项目「%s」工作流已恢复执行", proj.Name),
-		"project", proj.ID, nil, map[string]string{"run_id": run.ID})
+		"project", proj.ID, nil, map[string]string{"run_id": run.ID, "previous_status": string(previousStatus)})
 
 	stepCount := len(run.Steps)
 	go func() {
 		bgCtx := context.Background()
 		rc := &runCtx{run: run, stepCount: stepCount}
+		if shouldResumeFromPM(run) {
+			if err := e.runPMPhase(bgCtx, rc, proj); err != nil {
+				if e.handleRunInterruption(bgCtx, rc, proj, err) {
+					return
+				}
+				e.failRun(bgCtx, rc, err)
+				return
+			}
+		}
 		if err := e.continueRun(bgCtx, rc, proj); err != nil {
-			if errors.Is(err, errPhaseWaitingApproval) {
+			if e.handleRunInterruption(bgCtx, rc, proj, err) {
 				return
 			}
 			e.failRun(bgCtx, rc, err)
@@ -142,12 +183,14 @@ func (e *Engine) Run(ctx context.Context, projectID string) (*model.WorkflowRun,
 		"project", proj.ID, nil, map[string]string{"run_id": run.ID})
 
 	if err := e.runPMPhase(ctx, rc, proj); err != nil {
-		e.failRun(ctx, rc, err)
+		if !e.handleRunInterruption(ctx, rc, proj, err) {
+			e.failRun(ctx, rc, err)
+		}
 		return e.workflow.GetRun(ctx, run.ID)
 	}
 
 	if err := e.continueRun(ctx, rc, proj); err != nil {
-		if !errors.Is(err, errPhaseWaitingApproval) {
+		if !e.handleRunInterruption(ctx, rc, proj, err) {
 			e.failRun(ctx, rc, err)
 		}
 		return e.workflow.GetRun(ctx, run.ID)
@@ -179,12 +222,15 @@ func (e *Engine) RunAsync(ctx context.Context, projectID string) (*model.Workflo
 			"project", proj.ID, nil, map[string]string{"run_id": run.ID})
 
 		if err := e.runPMPhase(bgCtx, rc, proj); err != nil {
+			if e.handleRunInterruption(bgCtx, rc, proj, err) {
+				return
+			}
 			e.failRun(bgCtx, rc, err)
 			return
 		}
 
 		if err := e.continueRun(bgCtx, rc, proj); err != nil {
-			if errors.Is(err, errPhaseWaitingApproval) {
+			if e.handleRunInterruption(bgCtx, rc, proj, err) {
 				return
 			}
 			e.failRun(bgCtx, rc, err)
@@ -297,7 +343,7 @@ func (e *Engine) runPMPhase(ctx context.Context, rc *runCtx, proj *model.Project
 	}
 	if output.Status == runtime.OutputStatusFailed {
 		_ = e.workflow.FailStep(ctx, step, output.Error)
-		return fmt.Errorf("PM agent returned failure: %s", output.Error)
+		return newManualInterventionError("pm", "", "", "", "", output.Error)
 	}
 
 	if err := e.processPhaseActions(ctx, proj.ID, output.Phases); err != nil {
@@ -392,20 +438,43 @@ func phaseTasksCompleted(tasks []*model.Task) bool {
 const maxReworkAttempts = 3
 
 func (e *Engine) runTaskChain(ctx context.Context, rc *runCtx, proj *model.Project, phase *model.Phase, task *model.Task) error {
-	if err := e.runSupervisor(ctx, rc, proj, phase, task); err != nil {
-		return err
-	}
-
-	for attempt := 0; attempt <= maxReworkAttempts; attempt++ {
-		if err := e.runWorker(ctx, rc, proj, phase, task); err != nil {
+	switch task.Status {
+	case model.TaskStatusCompleted, model.TaskStatusPendingApproval:
+		return nil
+	case model.TaskStatusPending:
+		if err := e.runSupervisor(ctx, rc, proj, phase, task); err != nil {
 			return err
+		}
+		fresh, err := e.services.Task.GetByID(ctx, task.ID)
+		if err != nil {
+			return fmt.Errorf("reload task after supervisor: %w", err)
+		}
+		if fresh == nil {
+			return fmt.Errorf("task %s disappeared after supervisor", task.ID)
+		}
+		*task = *fresh
+		return e.runWorkerReviewerLoop(ctx, rc, proj, phase, task, false)
+	case model.TaskStatusAssigned, model.TaskStatusInProgress, model.TaskStatusRevisionRequired:
+		return e.runWorkerReviewerLoop(ctx, rc, proj, phase, task, false)
+	case model.TaskStatusInReview:
+		return e.runWorkerReviewerLoop(ctx, rc, proj, phase, task, true)
+	default:
+		return fmt.Errorf("task %q is not resumable from status %s", task.Title, task.Status)
+	}
+}
+
+func (e *Engine) runWorkerReviewerLoop(ctx context.Context, rc *runCtx, proj *model.Project, phase *model.Phase, task *model.Task, startWithReviewer bool) error {
+	for attempt := 0; attempt <= maxReworkAttempts; attempt++ {
+		if !startWithReviewer {
+			if err := e.runWorker(ctx, rc, proj, phase, task); err != nil {
+				return err
+			}
 		}
 
 		if err := e.runReviewer(ctx, rc, proj, phase, task); err != nil {
 			return err
 		}
 
-		// Reload task status after review
 		fresh, err := e.services.Task.GetByID(ctx, task.ID)
 		if err != nil {
 			return fmt.Errorf("reload task after review: %w", err)
@@ -416,10 +485,9 @@ func (e *Engine) runTaskChain(ctx context.Context, rc *runCtx, proj *model.Proje
 		*task = *fresh
 
 		if task.Status != model.TaskStatusRevisionRequired {
-			return nil // completed or other terminal state
+			return nil
 		}
 
-		// Rework: route back to owner supervisor
 		e.logger.Info("rework triggered", "task", task.Title, "attempt", attempt+1)
 		e.services.Audit.LogEvent(ctx, "system", "", "task.rework",
 			fmt.Sprintf("任务「%s」评审打回，第 %d 次返工，回到责任主管", task.Title, attempt+1),
@@ -428,8 +496,8 @@ func (e *Engine) runTaskChain(ctx context.Context, rc *runCtx, proj *model.Proje
 				"owner_supervisor_id": stringOrEmpty(task.OwnerSupervisorID),
 			})
 
-		// Transition back to assigned for the rework cycle
 		_ = e.services.Task.TransitionStatus(ctx, task.ID, model.TaskStatusInProgress)
+		startWithReviewer = false
 	}
 
 	e.logger.Warn("max rework attempts reached", "task", task.Title)
@@ -501,7 +569,7 @@ func (e *Engine) runSupervisor(ctx context.Context, rc *runCtx, proj *model.Proj
 	}
 	if output.Status == runtime.OutputStatusFailed {
 		_ = e.workflow.FailStep(ctx, step, output.Error)
-		return fmt.Errorf("supervisor failed: %s", output.Error)
+		return newManualInterventionError("supervisor", phase.ID, phase.Name, task.ID, task.Title, output.Error)
 	}
 
 	if err := e.processContractActions(ctx, task.ID, output.Contracts); err != nil {
@@ -586,7 +654,7 @@ func (e *Engine) runWorker(ctx context.Context, rc *runCtx, proj *model.Project,
 	}
 	if output.Status == runtime.OutputStatusFailed {
 		_ = e.workflow.FailStep(ctx, step, output.Error)
-		return fmt.Errorf("worker failed: %s", output.Error)
+		return newManualInterventionError("worker", phase.ID, phase.Name, task.ID, task.Title, output.Error)
 	}
 
 	if err := e.processArtifactActions(ctx, proj.ID, task.ID, agent.ID, output.Artifacts); err != nil {
@@ -659,7 +727,7 @@ func (e *Engine) runReviewer(ctx context.Context, rc *runCtx, proj *model.Projec
 	}
 	if output.Status == runtime.OutputStatusFailed {
 		_ = e.workflow.FailStep(ctx, step, output.Error)
-		return fmt.Errorf("reviewer failed: %s", output.Error)
+		return newManualInterventionError("reviewer", phase.ID, phase.Name, task.ID, task.Title, output.Error)
 	}
 
 	if err := e.processReviewActions(ctx, rc.run.ID, task.ID, agent.ID, artifactCtxs, output.Reviews); err != nil {
@@ -1051,4 +1119,59 @@ func (e *Engine) failRun(ctx context.Context, rc *runCtx, err error) {
 	e.services.Audit.LogEvent(ctx, "system", "", "workflow.failed",
 		fmt.Sprintf("工作流失败: %s", err.Error()),
 		"project", rc.run.ProjectID, nil, map[string]string{"run_id": rc.run.ID, "error": err.Error()})
+}
+
+func (e *Engine) handleRunInterruption(ctx context.Context, rc *runCtx, proj *model.Project, err error) bool {
+	if errors.Is(err, errPhaseWaitingApproval) {
+		return true
+	}
+	var manualErr *manualInterventionError
+	if !errors.As(err, &manualErr) {
+		return false
+	}
+	if waitErr := e.waitForManualIntervention(ctx, rc, proj, manualErr); waitErr != nil {
+		e.logger.Error("wait for manual intervention persistence error", "error", waitErr)
+		e.failRun(ctx, rc, waitErr)
+	}
+	return true
+}
+
+func (e *Engine) waitForManualIntervention(ctx context.Context, rc *runCtx, proj *model.Project, manualErr *manualInterventionError) error {
+	summary := fmt.Sprintf("项目「%s」因 LLM 执行失败等待人工介入", proj.Name)
+	if manualErr.taskTitle != "" {
+		summary = fmt.Sprintf("项目「%s」任务「%s」因 %s 执行失败等待人工介入", proj.Name, manualErr.taskTitle, manualErr.agentRole)
+	} else if manualErr.agentRole != "" {
+		summary = fmt.Sprintf("项目「%s」在 %s 步骤因 LLM 执行失败等待人工介入", proj.Name, manualErr.agentRole)
+	}
+	if err := e.workflow.WaitForManualIntervention(ctx, rc.run, summary, manualErr.reason); err != nil {
+		return fmt.Errorf("mark run waiting manual intervention: %w", err)
+	}
+	after := map[string]string{
+		"run_id":     rc.run.ID,
+		"agent_role": manualErr.agentRole,
+		"error":      manualErr.reason,
+	}
+	if manualErr.phaseID != "" {
+		after["phase_id"] = manualErr.phaseID
+	}
+	if manualErr.taskID != "" {
+		after["task_id"] = manualErr.taskID
+	}
+	e.services.Audit.LogEvent(ctx, "system", "", "workflow.waiting_manual_intervention",
+		summary, "project", proj.ID, nil, after)
+	return nil
+}
+
+func shouldResumeFromPM(run *model.WorkflowRun) bool {
+	if run == nil || len(run.Steps) == 0 {
+		return false
+	}
+	for idx := len(run.Steps) - 1; idx >= 0; idx-- {
+		step := run.Steps[idx]
+		if step == nil {
+			continue
+		}
+		return step.AgentRole == "pm" && step.Status == model.WorkflowStepFailed
+	}
+	return false
 }

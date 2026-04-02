@@ -9,6 +9,7 @@ import (
 	"github.com/lingchou/lingchoubot/backend/internal/repository"
 	"github.com/lingchou/lingchoubot/backend/internal/runtime"
 	"github.com/lingchou/lingchoubot/backend/internal/service"
+	"go.temporal.io/sdk/temporal"
 )
 
 // Activities groups all Temporal activity implementations.
@@ -49,6 +50,43 @@ func (st *stepTracker) fail(ctx context.Context, errMsg string) {
 func (st *stepTracker) setAgent(id string) { st.step.AgentID = &id }
 func (st *stepTracker) setTask(id string)  { st.step.TaskID = &id }
 func (st *stepTracker) setPhase(id string) { st.step.PhaseID = &id }
+
+func (a *Activities) waitForManualIntervention(ctx context.Context, runID string, proj *model.Project, agentRole, phaseID, taskID, taskTitle, reason string) error {
+	run, err := a.Workflow.GetRun(ctx, runID)
+	if err != nil {
+		return fmt.Errorf("get run for manual intervention: %w", err)
+	}
+	if run == nil {
+		return fmt.Errorf("run %s not found for manual intervention", runID)
+	}
+	projectName := run.ProjectID
+	projectID := run.ProjectID
+	if proj != nil {
+		projectName = proj.Name
+		projectID = proj.ID
+	}
+	summary := fmt.Sprintf("项目「%s」因 LLM 执行失败等待人工介入", projectName)
+	if taskTitle != "" {
+		summary = fmt.Sprintf("项目「%s」任务「%s」因 %s 执行失败等待人工介入", projectName, taskTitle, agentRole)
+	}
+	if err := a.Workflow.WaitForManualIntervention(ctx, run, summary, reason); err != nil {
+		return fmt.Errorf("mark run waiting manual intervention: %w", err)
+	}
+	after := map[string]string{"run_id": runID, "agent_role": agentRole, "error": reason}
+	if phaseID != "" {
+		after["phase_id"] = phaseID
+	}
+	if taskID != "" {
+		after["task_id"] = taskID
+	}
+	a.Services.Audit.LogEvent(ctx, "system", "", "workflow.waiting_manual_intervention",
+		summary, "project", projectID, nil, after)
+	return nil
+}
+
+func temporalManualInterventionError(reason string) error {
+	return temporal.NewNonRetryableApplicationError(temporalManualInterventionErrorPrefix+reason, "WAITING_MANUAL_INTERVENTION", nil)
+}
 
 // ActivityPM runs the PM agent to decompose a project into phases and tasks.
 func (a *Activities) ActivityPM(ctx context.Context, input ProjectWorkflowInput) (*PMActivityResult, error) {
@@ -96,7 +134,10 @@ func (a *Activities) ActivityPM(ctx context.Context, input ProjectWorkflowInput)
 	}
 	if output.Status == runtime.OutputStatusFailed {
 		st.fail(ctx, output.Error)
-		return nil, fmt.Errorf("PM agent returned failure: %s", output.Error)
+		if waitErr := a.waitForManualIntervention(ctx, input.RunID, proj, "pm", "", "", "", output.Error); waitErr != nil {
+			return nil, waitErr
+		}
+		return nil, temporalManualInterventionError(output.Error)
 	}
 
 	// Process phase actions
@@ -244,7 +285,10 @@ func (a *Activities) ActivitySupervisor(ctx context.Context, input TaskChainInpu
 	}
 	if output.Status == runtime.OutputStatusFailed {
 		st.fail(ctx, output.Error)
-		return nil, fmt.Errorf("supervisor failed: %s", output.Error)
+		if waitErr := a.waitForManualIntervention(ctx, input.RunID, proj, "supervisor", input.PhaseID, task.ID, task.Title, output.Error); waitErr != nil {
+			return nil, waitErr
+		}
+		return nil, temporalManualInterventionError(output.Error)
 	}
 
 	eng := &Engine{registry: a.Registry, services: a.Services, workflow: a.Workflow, logger: a.Logger}
@@ -331,7 +375,10 @@ func (a *Activities) ActivityWorker(ctx context.Context, input TaskChainInput) (
 	}
 	if output.Status == runtime.OutputStatusFailed {
 		st.fail(ctx, output.Error)
-		return nil, fmt.Errorf("worker failed: %s", output.Error)
+		if waitErr := a.waitForManualIntervention(ctx, input.RunID, proj, "worker", input.PhaseID, task.ID, task.Title, output.Error); waitErr != nil {
+			return nil, waitErr
+		}
+		return nil, temporalManualInterventionError(output.Error)
 	}
 
 	eng := &Engine{registry: a.Registry, services: a.Services, workflow: a.Workflow, logger: a.Logger}
@@ -422,7 +469,10 @@ func (a *Activities) ActivityReviewer(ctx context.Context, input TaskChainInput)
 	}
 	if output.Status == runtime.OutputStatusFailed {
 		st.fail(ctx, output.Error)
-		return nil, fmt.Errorf("reviewer failed: %s", output.Error)
+		if waitErr := a.waitForManualIntervention(ctx, input.RunID, proj, "reviewer", input.PhaseID, task.ID, task.Title, output.Error); waitErr != nil {
+			return nil, waitErr
+		}
+		return nil, temporalManualInterventionError(output.Error)
 	}
 
 	if err := eng.processReviewActions(ctx, input.RunID, task.ID, agent.ID, artifactCtxs, output.Reviews); err != nil {

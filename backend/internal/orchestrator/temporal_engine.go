@@ -7,6 +7,7 @@ import (
 
 	"github.com/lingchou/lingchoubot/backend/internal/model"
 	"github.com/lingchou/lingchoubot/backend/internal/repository"
+	"github.com/lingchou/lingchoubot/backend/internal/runtime"
 	"github.com/lingchou/lingchoubot/backend/internal/service"
 	"go.temporal.io/sdk/client"
 )
@@ -15,16 +16,18 @@ import (
 type TemporalEngine struct {
 	client    client.Client
 	taskQueue string
+	registry  *runtime.Registry
 	services  *Services
 	workflow  *service.WorkflowService
 	logger    *slog.Logger
 }
 
 // NewTemporalEngine creates an engine that dispatches runs to Temporal.
-func NewTemporalEngine(tc client.Client, taskQueue string, services *Services, workflow *service.WorkflowService, logger *slog.Logger) *TemporalEngine {
+func NewTemporalEngine(tc client.Client, taskQueue string, reg *runtime.Registry, services *Services, workflow *service.WorkflowService, logger *slog.Logger) *TemporalEngine {
 	return &TemporalEngine{
 		client:    tc,
 		taskQueue: taskQueue,
+		registry:  reg,
 		services:  services,
 		workflow:  workflow,
 		logger:    logger,
@@ -78,6 +81,12 @@ func (te *TemporalEngine) GetRun(ctx context.Context, id string) (*model.Workflo
 // ListRuns returns paginated workflow runs from the database.
 func (te *TemporalEngine) ListRuns(ctx context.Context, p repository.WorkflowRunListParams) ([]*model.WorkflowRun, int, error) {
 	return te.workflow.ListRuns(ctx, p)
+}
+
+// ResumeRun resumes a waiting workflow by delegating to the local engine continuation logic.
+func (te *TemporalEngine) ResumeRun(ctx context.Context, id string) error {
+	engine := NewEngine(te.registry, te.services, te.workflow, te.logger)
+	return engine.ResumeRun(ctx, id)
 }
 
 // CancelRun cancels a Temporal workflow and marks the run as cancelled in the database.

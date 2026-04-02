@@ -190,7 +190,7 @@ func main() {
 			}
 			defer temporalClient.Close()
 
-			workflowEngine = orchestrator.NewTemporalEngine(temporalClient, cfg.Temporal.TaskQueue, orchServices, workflowSvc, logger)
+			workflowEngine = orchestrator.NewTemporalEngine(temporalClient, cfg.Temporal.TaskQueue, reg, orchServices, workflowSvc, logger)
 			logger.Info("Temporal workflow engine active (embedded worker)", "host_port", cfg.Temporal.HostPort)
 		} else {
 			// Separate worker mode: only create the Temporal client for dispatching
@@ -201,15 +201,15 @@ func main() {
 			}
 			defer tc.Close()
 
-			workflowEngine = orchestrator.NewTemporalEngine(tc, cfg.Temporal.TaskQueue, orchServices, workflowSvc, logger)
+			workflowEngine = orchestrator.NewTemporalEngine(tc, cfg.Temporal.TaskQueue, reg, orchServices, workflowSvc, logger)
 			logger.Info("Temporal workflow engine active (external worker)", "host_port", cfg.Temporal.HostPort)
 		}
 	} else {
 		engine := orchestrator.NewEngine(reg, orchServices, workflowSvc, logger)
-		approvalSvc.SetWorkflowResumer(engine)
 		workflowEngine = engine
 		logger.Info("local workflow engine active")
 	}
+	approvalSvc.SetWorkflowResumer(workflowEngine)
 
 	handler.NewOrchestratorHandler(workflowEngine).Register(mux)
 

@@ -179,6 +179,18 @@ func TestStringOrEmpty(t *testing.T) {
 	}
 }
 
+func TestShouldResumeFromPM(t *testing.T) {
+	run := &model.WorkflowRun{Steps: []*model.WorkflowStep{{AgentRole: "pm", Status: model.WorkflowStepFailed}}}
+	if !shouldResumeFromPM(run) {
+		t.Fatal("expected shouldResumeFromPM to return true for failed PM step")
+	}
+
+	run = &model.WorkflowRun{Steps: []*model.WorkflowStep{{AgentRole: "worker", Status: model.WorkflowStepFailed}}}
+	if shouldResumeFromPM(run) {
+		t.Fatal("expected shouldResumeFromPM to return false for non-PM failure")
+	}
+}
+
 func TestWorkflowRunStatusConstants(t *testing.T) {
 	tests := []struct {
 		s    model.WorkflowRunStatus
@@ -187,6 +199,7 @@ func TestWorkflowRunStatusConstants(t *testing.T) {
 		{model.WorkflowRunPending, "pending"},
 		{model.WorkflowRunRunning, "running"},
 		{model.WorkflowRunWaitingApproval, "waiting_approval"},
+		{model.WorkflowRunWaitingManual, "waiting_manual_intervention"},
 		{model.WorkflowRunCompleted, "completed"},
 		{model.WorkflowRunFailed, "failed"},
 		{model.WorkflowRunCancelled, "cancelled"},

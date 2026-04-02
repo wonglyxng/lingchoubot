@@ -2,11 +2,21 @@ package orchestrator
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
+
+const temporalManualInterventionErrorPrefix = "waiting_manual_intervention: "
+
+func isTemporalManualInterventionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), temporalManualInterventionErrorPrefix)
+}
 
 // ProjectWorkflowInput is the input for the Temporal workflow.
 type ProjectWorkflowInput struct {
@@ -59,6 +69,9 @@ func ProjectWorkflow(ctx workflow.Context, input ProjectWorkflowInput) error {
 	var pmResult PMActivityResult
 	err := workflow.ExecuteActivity(ctx, "ActivityPM", input).Get(ctx, &pmResult)
 	if err != nil {
+		if isTemporalManualInterventionError(err) {
+			return nil
+		}
 		return failRun("PM activity failed", err)
 	}
 	stepCount = pmResult.StepCount
@@ -86,6 +99,9 @@ func ProjectWorkflow(ctx workflow.Context, input ProjectWorkflowInput) error {
 			var supResult StepResult
 			err = workflow.ExecuteActivity(ctx, "ActivitySupervisor", chainInput).Get(ctx, &supResult)
 			if err != nil {
+				if isTemporalManualInterventionError(err) {
+					return nil
+				}
 				return failRun(fmt.Sprintf("supervisor activity failed for task %s", taskID), err)
 			}
 			stepCount = supResult.StepCount
@@ -99,6 +115,9 @@ func ProjectWorkflow(ctx workflow.Context, input ProjectWorkflowInput) error {
 				chainInput.SortOffset = stepCount
 				err = workflow.ExecuteActivity(ctx, "ActivityWorker", chainInput).Get(ctx, &workerResult)
 				if err != nil {
+					if isTemporalManualInterventionError(err) {
+						return nil
+					}
 					return failRun(fmt.Sprintf("worker activity failed for task %s", taskID), err)
 				}
 				stepCount = workerResult.StepCount
@@ -108,6 +127,9 @@ func ProjectWorkflow(ctx workflow.Context, input ProjectWorkflowInput) error {
 				var reviewResult StepResult
 				err = workflow.ExecuteActivity(ctx, "ActivityReviewer", chainInput).Get(ctx, &reviewResult)
 				if err != nil {
+					if isTemporalManualInterventionError(err) {
+						return nil
+					}
 					return failRun(fmt.Sprintf("reviewer activity failed for task %s", taskID), err)
 				}
 				stepCount = reviewResult.StepCount

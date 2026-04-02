@@ -20,6 +20,7 @@ type mockWorkflowEngine struct {
 	runAsyncFn  func(ctx context.Context, projectID string) (*model.WorkflowRun, error)
 	getRunFn    func(ctx context.Context, id string) (*model.WorkflowRun, error)
 	listRunsFn  func(ctx context.Context, params repository.WorkflowRunListParams) ([]*model.WorkflowRun, int, error)
+	resumeRunFn func(ctx context.Context, id string) error
 	cancelRunFn func(ctx context.Context, id string) error
 }
 
@@ -45,6 +46,13 @@ func (m *mockWorkflowEngine) ListRuns(ctx context.Context, params repository.Wor
 		return m.listRunsFn(ctx, params)
 	}
 	return nil, 0, fmt.Errorf("not implemented")
+}
+
+func (m *mockWorkflowEngine) ResumeRun(ctx context.Context, id string) error {
+	if m.resumeRunFn != nil {
+		return m.resumeRunFn(ctx, id)
+	}
+	return fmt.Errorf("not implemented")
 }
 
 func (m *mockWorkflowEngine) CancelRun(ctx context.Context, id string) error {
@@ -313,6 +321,49 @@ func TestOrchestratorHandler_ListRuns_Error(t *testing.T) {
 
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d", w.Code)
+	}
+}
+
+func TestOrchestratorHandler_ResumeRun_Success(t *testing.T) {
+	engine := &mockWorkflowEngine{
+		resumeRunFn: func(ctx context.Context, id string) error {
+			if id != "run-001" {
+				t.Errorf("expected id 'run-001', got %q", id)
+			}
+			return nil
+		},
+	}
+
+	h := NewOrchestratorHandler(engine)
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/v1/orchestrator/runs/run-001/resume", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestOrchestratorHandler_ResumeRun_Error(t *testing.T) {
+	engine := &mockWorkflowEngine{
+		resumeRunFn: func(ctx context.Context, id string) error {
+			return fmt.Errorf("run is not resumable")
+		},
+	}
+
+	h := NewOrchestratorHandler(engine)
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/v1/orchestrator/runs/run-001/resume", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

@@ -319,6 +319,97 @@ func (r *alwaysRejectReviewer) Execute(_ *runtime.AgentTaskInput) (*runtime.Agen
 	}, nil
 }
 
+type failOnceWorker struct {
+	mu      sync.Mutex
+	failed  bool
+	fallback runtime.AgentRunner
+}
+
+func (w *failOnceWorker) Role() string { return "worker" }
+
+func (w *failOnceWorker) Execute(input *runtime.AgentTaskInput) (*runtime.AgentTaskOutput, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.failed {
+		w.failed = true
+		return &runtime.AgentTaskOutput{Status: runtime.OutputStatusFailed, Error: "LLM call failed: upstream timeout"}, nil
+	}
+	return w.fallback.Execute(input)
+}
+
+func TestIntegration_LLMFailureWaitsForManualInterventionAndResume(t *testing.T) {
+	ctx := context.Background()
+	f := testutil.NewFixture()
+
+	if err := f.SeedStandardAgents(ctx); err != nil {
+		t.Fatalf("seed agents: %v", err)
+	}
+
+	baseWorker, err := f.Registry.Get("worker")
+	if err != nil {
+		t.Fatalf("get base worker: %v", err)
+	}
+	f.Registry.Register("worker", &failOnceWorker{fallback: baseWorker})
+
+	proj := &model.Project{Name: "人工介入恢复项目", Description: "验证 LLM 失败挂起与恢复"}
+	if err := f.ProjectSvc.Create(ctx, proj); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	run, err := f.Engine.Run(ctx, proj.ID)
+	if err != nil {
+		t.Fatalf("Engine.Run: %v", err)
+	}
+	if run.Status != model.WorkflowRunWaitingManual {
+		t.Fatalf("run status = %q, want %q", run.Status, model.WorkflowRunWaitingManual)
+	}
+	if run.Error == "" {
+		t.Fatal("expected run error to capture LLM failure reason")
+	}
+
+	steps := f.WorkflowStepRepo.StepsForRun(run.ID)
+	if len(steps) == 0 || steps[len(steps)-1].Status != model.WorkflowStepFailed {
+		t.Fatal("expected last workflow step to be failed before manual resume")
+	}
+
+	hasWaitingManual := false
+	for _, entry := range f.AuditRepo.Entries() {
+		if entry.EventType == "workflow.waiting_manual_intervention" {
+			hasWaitingManual = true
+			break
+		}
+	}
+	if !hasWaitingManual {
+		t.Fatal("missing workflow.waiting_manual_intervention audit event")
+	}
+
+	if err := f.Engine.ResumeRun(ctx, run.ID); err != nil {
+		t.Fatalf("ResumeRun: %v", err)
+	}
+
+	finalRun, err := f.WorkflowSvc.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("GetRun after resume: %v", err)
+	}
+	if finalRun == nil {
+		t.Fatal("run not found after resume")
+	}
+	if finalRun.Status != model.WorkflowRunWaitingApproval {
+		t.Fatalf("final run status = %q, want %q", finalRun.Status, model.WorkflowRunWaitingApproval)
+	}
+
+	hasResumed := false
+	for _, entry := range f.AuditRepo.Entries() {
+		if entry.EventType == "workflow.resumed" {
+			hasResumed = true
+			break
+		}
+	}
+	if !hasResumed {
+		t.Fatal("missing workflow.resumed audit event")
+	}
+}
+
 func TestIntegration_ReworkPath(t *testing.T) {
 	ctx := context.Background()
 	f := testutil.NewFixture()

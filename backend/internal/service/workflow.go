@@ -73,6 +73,15 @@ func (s *WorkflowService) WaitForApproval(ctx context.Context, run *model.Workfl
 	return s.runRepo.UpdateStatus(ctx, run)
 }
 
+// WaitForManualIntervention marks a run as waiting for human intervention after a recoverable LLM failure.
+func (s *WorkflowService) WaitForManualIntervention(ctx context.Context, run *model.WorkflowRun, summary, errMsg string) error {
+	run.Status = model.WorkflowRunWaitingManual
+	run.Summary = summary
+	run.Error = errMsg
+	run.CompletedAt = nil
+	return s.runRepo.UpdateStatus(ctx, run)
+}
+
 // ResumeRun marks a waiting run as running again so execution can continue.
 func (s *WorkflowService) ResumeRun(ctx context.Context, run *model.WorkflowRun, summary string) error {
 	run.Status = model.WorkflowRunRunning

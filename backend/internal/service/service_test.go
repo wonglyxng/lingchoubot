@@ -938,6 +938,20 @@ func TestWorkflowServiceRunLifecycle(t *testing.T) {
 		t.Fatalf("expected run error %q, got %q", "boom", runRepo.lastUpdatedRun.Error)
 	}
 
+	runManual, err := svc.CreateRun(ctx, "proj-manual")
+	if err != nil {
+		t.Fatalf("CreateRun manual run returned error: %v", err)
+	}
+	if err := svc.WaitForManualIntervention(ctx, runManual, "manual waiting", "llm failed"); err != nil {
+		t.Fatalf("WaitForManualIntervention returned error: %v", err)
+	}
+	if runRepo.lastUpdatedRun == nil || runRepo.lastUpdatedRun.Status != model.WorkflowRunWaitingManual {
+		t.Fatalf("expected updated run status %q, got %#v", model.WorkflowRunWaitingManual, runRepo.lastUpdatedRun)
+	}
+	if runRepo.lastUpdatedRun.Error != "llm failed" {
+		t.Fatalf("expected run error %q, got %q", "llm failed", runRepo.lastUpdatedRun.Error)
+	}
+
 	run3, err := svc.CreateRun(ctx, "proj-3")
 	if err != nil {
 		t.Fatalf("CreateRun third run returned error: %v", err)

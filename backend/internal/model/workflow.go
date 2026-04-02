@@ -9,6 +9,7 @@ const (
 	WorkflowRunPending         WorkflowRunStatus = "pending"
 	WorkflowRunRunning         WorkflowRunStatus = "running"
 	WorkflowRunWaitingApproval WorkflowRunStatus = "waiting_approval"
+	WorkflowRunWaitingManual   WorkflowRunStatus = "waiting_manual_intervention"
 	WorkflowRunCompleted       WorkflowRunStatus = "completed"
 	WorkflowRunFailed          WorkflowRunStatus = "failed"
 	WorkflowRunCancelled       WorkflowRunStatus = "cancelled"

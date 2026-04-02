@@ -23,6 +23,7 @@ func (h *OrchestratorHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/orchestrator/runs", h.StartRun)
 	mux.HandleFunc("GET /api/v1/orchestrator/runs", h.ListRuns)
 	mux.HandleFunc("GET /api/v1/orchestrator/runs/{id}", h.GetRun)
+	mux.HandleFunc("POST /api/v1/orchestrator/runs/{id}/resume", h.ResumeRun)
 	mux.HandleFunc("POST /api/v1/orchestrator/runs/{id}/cancel", h.CancelRun)
 }
 
@@ -95,6 +96,16 @@ func (h *OrchestratorHandler) GetRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	middleware.JSON(w, http.StatusOK, run)
+}
+
+// ResumeRun resumes a paused workflow.
+func (h *OrchestratorHandler) ResumeRun(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := h.engine.ResumeRun(r.Context(), id); err != nil {
+		middleware.ErrorJSON(w, http.StatusBadRequest, "RESUME_ERROR", err.Error())
+		return
+	}
+	middleware.JSON(w, http.StatusOK, map[string]string{"status": "running"})
 }
 
 // CancelRun cancels a running workflow.

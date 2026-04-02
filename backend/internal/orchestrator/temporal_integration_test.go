@@ -212,3 +212,84 @@ func TestTemporal_WorkflowFailsWithoutReviewer(t *testing.T) {
 		t.Errorf("run status = %q, want %q", finalRun.Status, model.WorkflowRunFailed)
 	}
 }
+
+func TestTemporal_WorkflowWaitsForManualInterventionOnLLMFailure(t *testing.T) {
+	ctx := context.Background()
+	f := testutil.NewFixture()
+
+	if err := f.SeedStandardAgents(ctx); err != nil {
+		t.Fatalf("seed agents: %v", err)
+	}
+	baseWorker, err := f.Registry.Get("worker")
+	if err != nil {
+		t.Fatalf("get base worker: %v", err)
+	}
+	f.Registry.Register("worker", &failOnceWorker{fallback: baseWorker})
+
+	proj := &model.Project{Name: "Temporal人工介入项目", Description: "验证 Temporal LLM 失败挂起"}
+	if err := f.ProjectSvc.Create(ctx, proj); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	run, err := f.WorkflowSvc.CreateRun(ctx, proj.ID)
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	activities := &orchestrator.Activities{
+		Registry: f.Registry,
+		Services: &orchestrator.Services{
+			Project:    f.ProjectSvc,
+			Phase:      f.PhaseSvc,
+			Agent:      f.AgentSvc,
+			Task:       f.TaskSvc,
+			Contract:   f.ContractSvc,
+			Assignment: f.AssignmentSvc,
+			Artifact:   f.ArtifactSvc,
+			Handoff:    f.HandoffSvc,
+			Review:     f.ReviewSvc,
+			Approval:   f.ApprovalSvc,
+			Audit:      f.AuditSvc,
+		},
+		Workflow: f.WorkflowSvc,
+		Logger:   f.Logger,
+	}
+
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterActivity(activities.ActivityPM)
+	env.RegisterActivity(activities.ActivityListPhaseTasks)
+	env.RegisterActivity(activities.ActivitySupervisor)
+	env.RegisterActivity(activities.ActivityWorker)
+	env.RegisterActivity(activities.ActivityReviewer)
+	env.RegisterActivity(activities.ActivityCheckRework)
+	env.RegisterActivity(activities.ActivityCompleteRun)
+	env.RegisterActivity(activities.ActivityFailRun)
+	env.ExecuteWorkflow(orchestrator.ProjectWorkflow, orchestrator.ProjectWorkflowInput{RunID: run.ID, ProjectID: proj.ID})
+
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("expected no workflow error, got %v", err)
+	}
+	finalRun, _ := f.WorkflowSvc.GetRun(ctx, run.ID)
+	if finalRun == nil {
+		t.Fatal("run not found")
+	}
+	if finalRun.Status != model.WorkflowRunWaitingManual {
+		t.Errorf("run status = %q, want %q", finalRun.Status, model.WorkflowRunWaitingManual)
+	}
+	if finalRun.Error == "" {
+		t.Fatal("expected waiting manual run to keep error reason")
+	}
+	hasWaitingManual := false
+	for _, entry := range f.AuditRepo.Entries() {
+		if entry.EventType == "workflow.waiting_manual_intervention" {
+			hasWaitingManual = true
+			break
+		}
+	}
+	if !hasWaitingManual {
+		t.Fatal("missing workflow.waiting_manual_intervention audit event")
+	}
+}
