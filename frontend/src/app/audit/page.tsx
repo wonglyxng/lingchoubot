@@ -1,47 +1,103 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { ScrollText, Wifi, WifiOff } from "lucide-react";
 import { api } from "@/lib/api";
 import type { AuditLog } from "@/lib/types";
 import { formatTime, relativeTime } from "@/lib/utils";
 import { useEventStream, type SSEEvent } from "@/lib/useEventStream";
 
+function mergeAuditItems(existing: AuditLog[], incoming: AuditLog[]) {
+  const byID = new Map(existing.map((item) => [item.id, item]));
+  for (const item of incoming) {
+    byID.set(item.id, item);
+  }
+  return Array.from(byID.values())
+    .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime())
+    .slice(0, 50);
+}
+
+function parseAuditEvent(event: SSEEvent) {
+  if (!event.data || typeof event.data !== "object") {
+    return null;
+  }
+
+  const row = event.data as Partial<AuditLog>;
+  if (typeof row.id !== "string" || typeof row.event_type !== "string" || typeof row.created_at !== "string") {
+    return null;
+  }
+
+  return row as AuditLog;
+}
+
 export default function AuditPage() {
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState<AuditLog[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const refreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const fetchList = useCallback(() => {
-    return api.audit.list().then((res) => setItems(res.items));
+  const fetchList = useCallback(async (showLoading: boolean) => {
+    if (showLoading) {
+      setLoading(true);
+      setError(null);
+    }
+
+    try {
+      const res = await api.audit.list();
+      setItems(res.items);
+    } catch (e: unknown) {
+      if (showLoading) {
+        setError(e instanceof Error ? e.message : "加载失败");
+      }
+    } finally {
+      if (showLoading) {
+        setLoading(false);
+      }
+    }
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    fetchList()
-      .catch((e: Error) => {
-        if (!cancelled) setError(e.message || "加载失败");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+    void fetchList(true);
+  }, [fetchList]);
+
+  useEffect(() => () => {
+    if (refreshRef.current) {
+      clearTimeout(refreshRef.current);
+      refreshRef.current = null;
+    }
+  }, []);
+
+  const scheduleRefresh = useCallback(() => {
+    if (refreshRef.current) {
+      return;
+    }
+
+    refreshRef.current = setTimeout(() => {
+      refreshRef.current = null;
+      void fetchList(false);
+    }, 300);
   }, [fetchList]);
 
   // SSE real-time updates — audit receives all topics
   const topics = useMemo(() => ["audit", "workflow", "approval", "tool_call"], []);
-  const onEvent = useCallback((_evt: SSEEvent) => {
-    fetchList().catch(() => {});
-  }, [fetchList]);
+  const onEvent = useCallback((event: SSEEvent) => {
+    const row = parseAuditEvent(event);
+    if (!row) {
+      scheduleRefresh();
+      return;
+    }
+
+    setError(null);
+    setLoading(false);
+    setItems((current) => mergeAuditItems(current, [row]));
+  }, [scheduleRefresh]);
 
   const { connected, mode } = useEventStream({
     topics,
     onEvent,
-    onPoll: () => { fetchList().catch(() => {}); },
+    onPoll: () => {
+      void fetchList(false);
+    },
     pollInterval: 10000,
   });
 

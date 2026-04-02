@@ -43,14 +43,50 @@ func (s *AuditService) publishEvent(entry *model.AuditLog) {
 	if err != nil {
 		return
 	}
+	targetID := entry.TargetID
+	projectID := ""
+	if topic == "workflow" {
+		targetID, projectID = workflowEventIDs(entry)
+	}
 	s.hub.Publish(&Event{
 		ID:        entry.ID,
 		Topic:     topic,
 		EventType: entry.EventType,
-		TargetID:  entry.TargetID,
+		TargetID:  targetID,
+		ProjectID: projectID,
 		Data:      data,
 		Timestamp: time.Now(),
 	})
+}
+
+func workflowEventIDs(entry *model.AuditLog) (string, string) {
+	targetID := entry.TargetID
+	projectID := ""
+
+	if entry.TargetType == "project" {
+		projectID = entry.TargetID
+	}
+
+	if entry.AfterState == nil {
+		return targetID, projectID
+	}
+
+	var after struct {
+		RunID     string `json:"run_id"`
+		ProjectID string `json:"project_id"`
+	}
+	if err := json.Unmarshal([]byte(*entry.AfterState), &after); err != nil {
+		return targetID, projectID
+	}
+
+	if after.RunID != "" {
+		targetID = after.RunID
+	}
+	if projectID == "" && after.ProjectID != "" {
+		projectID = after.ProjectID
+	}
+
+	return targetID, projectID
 }
 
 // topicFromEventType maps audit event types to SSE topics.

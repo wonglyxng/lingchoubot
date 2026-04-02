@@ -43,6 +43,10 @@ function mergeRunList(existing: WorkflowRun[], updated: WorkflowRun) {
 }
 
 function extractRunID(event: SSEEvent) {
+  if (typeof event.target_id === "string" && event.target_id.length > 0) {
+    return event.target_id;
+  }
+
   if (!event.data || typeof event.data !== "object") {
     return null;
   }

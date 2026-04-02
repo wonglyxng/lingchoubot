@@ -1,12 +1,19 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { Wrench, Wifi, WifiOff } from "lucide-react";
 import { api } from "@/lib/api";
 import type { ToolCall } from "@/lib/types";
 import { StatusBadge } from "@/components/StatusBadge";
 import { formatTime } from "@/lib/utils";
 import { useEventStream, type SSEEvent } from "@/lib/useEventStream";
+
+function mergeToolCalls(existing: ToolCall[], updated: ToolCall) {
+  const next = [updated, ...existing.filter((item) => item.id !== updated.id)];
+  return next
+    .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime())
+    .slice(0, 50);
+}
 
 function toolCallStatus(status: string) {
   switch (status) {
@@ -28,29 +35,75 @@ export default function ToolCallsPage() {
   const [items, setItems] = useState<ToolCall[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const refreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const load = useCallback(() => {
-    setLoading(true);
-    setError(null);
-    api.toolCalls
-      .list()
-      .then((res) => setItems(res.items ?? []))
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setLoading(false));
+  const load = useCallback(async (showLoading: boolean) => {
+    if (showLoading) {
+      setLoading(true);
+      setError(null);
+    }
+
+    try {
+      const res = await api.toolCalls.list();
+      setItems(res.items ?? []);
+    } catch (e: unknown) {
+      if (showLoading) {
+        setError(e instanceof Error ? e.message : "加载失败");
+      }
+    } finally {
+      if (showLoading) {
+        setLoading(false);
+      }
+    }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    void load(true);
+  }, [load]);
+
+  useEffect(() => () => {
+    if (refreshRef.current) {
+      clearTimeout(refreshRef.current);
+      refreshRef.current = null;
+    }
+  }, []);
+
+  const scheduleRefresh = useCallback(() => {
+    if (refreshRef.current) {
+      return;
+    }
+
+    refreshRef.current = setTimeout(() => {
+      refreshRef.current = null;
+      void load(false);
+    }, 300);
+  }, [load]);
 
   // SSE real-time updates
   const topics = useMemo(() => ["tool_call"], []);
-  const onEvent = useCallback((_evt: SSEEvent) => {
-    api.toolCalls.list().then((res) => setItems(res.items ?? [])).catch(() => {});
-  }, []);
+  const onEvent = useCallback((event: SSEEvent) => {
+    if (!event.target_id) {
+      scheduleRefresh();
+      return;
+    }
+
+    api.toolCalls.get(event.target_id)
+      .then((item) => {
+        setError(null);
+        setLoading(false);
+        setItems((current) => mergeToolCalls(current, item));
+      })
+      .catch(() => {
+        scheduleRefresh();
+      });
+  }, [scheduleRefresh]);
 
   const { connected, mode } = useEventStream({
     topics,
     onEvent,
-    onPoll: load,
+    onPoll: () => {
+      void load(false);
+    },
     pollInterval: 5000,
   });
 
