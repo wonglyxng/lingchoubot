@@ -545,3 +545,35 @@ func TestLLMRunnerClientForInputDynamicLookupPriority(t *testing.T) {
 		t.Errorf("expected dynamic key, got %s", client.cfg.APIKey)
 	}
 }
+
+func TestLLMRunnerClientForInputDynamicLookupFallsBackWhenKeyMissing(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	runner := NewLLMRunner(NewLLMClient(LLMClientConfig{
+		BaseURL: "https://api.openai.com/v1",
+		APIKey:  "default-key",
+		Model:   "gpt-4.1-mini",
+	}), "worker", "backend", logger).
+		WithProviderConfigs(map[string]LLMClientConfig{
+			"openai": {BaseURL: "https://api.openai.com/v1", APIKey: "env-openai-key"},
+		}).
+		WithProviderLookup(func(key string) (string, string, bool) {
+			if key == "openai" {
+				return "https://api.openai.com/v1", "", true
+			}
+			return "", "", false
+		})
+
+	client, err := runner.clientForInput(&AgentTaskInput{
+		AgentLLM: &AgentLLMConfig{Provider: "openai", Model: "gpt-4.1-mini"},
+	})
+	if err != nil {
+		t.Fatalf("clientForInput returned error: %v", err)
+	}
+	if client.cfg.BaseURL != "https://api.openai.com/v1" {
+		t.Errorf("expected openai base URL, got %s", client.cfg.BaseURL)
+	}
+	if client.cfg.APIKey != "env-openai-key" {
+		t.Errorf("expected static fallback key, got %s", client.cfg.APIKey)
+	}
+}

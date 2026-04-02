@@ -964,6 +964,12 @@ func (r *FakeWorkflowStepRepo) ListByRunID(_ context.Context, runID string) ([]*
 			result = append(result, &cp)
 		}
 	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].SortOrder != result[j].SortOrder {
+			return result[i].SortOrder < result[j].SortOrder
+		}
+		return result[i].CreatedAt.Before(result[j].CreatedAt)
+	})
 	return result, nil
 }
 
@@ -978,6 +984,12 @@ func (r *FakeWorkflowStepRepo) StepsForRun(runID string) []*model.WorkflowStep {
 			result = append(result, &cp)
 		}
 	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].SortOrder != result[j].SortOrder {
+			return result[i].SortOrder < result[j].SortOrder
+		}
+		return result[i].CreatedAt.Before(result[j].CreatedAt)
+	})
 	return result
 }
 

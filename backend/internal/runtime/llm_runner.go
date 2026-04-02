@@ -177,15 +177,23 @@ func (r *LLMAgentRunner) clientForInput(input *AgentTaskInput) (*LLMClient, erro
 
 	cfg := r.client.cfg
 	if input.AgentLLM.Provider != "" {
+		providerCfg, hasStaticProvider := r.providerConfigs[input.AgentLLM.Provider]
 		// 1. Try dynamic lookup (DB-backed) first
 		if r.providerLookup != nil {
 			if baseURL, apiKey, found := r.providerLookup(input.AgentLLM.Provider); found {
 				cfg.BaseURL = baseURL
 				cfg.APIKey = apiKey
+				if hasStaticProvider {
+					if cfg.BaseURL == "" {
+						cfg.BaseURL = providerCfg.BaseURL
+					}
+					if cfg.APIKey == "" {
+						cfg.APIKey = providerCfg.APIKey
+					}
+				}
 			} else {
 				// 2. Fall back to static map (env-var based)
-				providerCfg, ok := r.providerConfigs[input.AgentLLM.Provider]
-				if !ok {
+				if !hasStaticProvider {
 					return nil, fmt.Errorf("unsupported llm provider %q", input.AgentLLM.Provider)
 				}
 				if providerCfg.BaseURL == "" {
@@ -195,8 +203,7 @@ func (r *LLMAgentRunner) clientForInput(input *AgentTaskInput) (*LLMClient, erro
 				cfg.APIKey = providerCfg.APIKey
 			}
 		} else {
-			providerCfg, ok := r.providerConfigs[input.AgentLLM.Provider]
-			if !ok {
+			if !hasStaticProvider {
 				return nil, fmt.Errorf("unsupported llm provider %q", input.AgentLLM.Provider)
 			}
 			if providerCfg.BaseURL == "" {
