@@ -6,12 +6,12 @@ import "time"
 type WorkflowRunStatus string
 
 const (
-	WorkflowRunPending   WorkflowRunStatus = "pending"
-	WorkflowRunRunning   WorkflowRunStatus = "running"
+	WorkflowRunPending         WorkflowRunStatus = "pending"
+	WorkflowRunRunning         WorkflowRunStatus = "running"
 	WorkflowRunWaitingApproval WorkflowRunStatus = "waiting_approval"
-	WorkflowRunCompleted WorkflowRunStatus = "completed"
-	WorkflowRunFailed    WorkflowRunStatus = "failed"
-	WorkflowRunCancelled WorkflowRunStatus = "cancelled"
+	WorkflowRunCompleted       WorkflowRunStatus = "completed"
+	WorkflowRunFailed          WorkflowRunStatus = "failed"
+	WorkflowRunCancelled       WorkflowRunStatus = "cancelled"
 )
 
 // WorkflowStepStatus represents the state of a single step within a run.

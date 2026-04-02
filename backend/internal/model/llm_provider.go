@@ -4,18 +4,18 @@ import "time"
 
 // LLMProvider 代表一个大模型供应商配置
 type LLMProvider struct {
-	ID        string    `json:"id"`
-	Key       string    `json:"key"`
-	Name      string    `json:"name"`
-	BaseURL   string    `json:"base_url"`
-	APIKey    string    `json:"api_key,omitempty"`
-	IsBuiltin bool      `json:"is_builtin"`
-	IsEnabled bool      `json:"is_enabled"`
-	SortOrder int       `json:"sort_order"`
-	Metadata  JSON      `json:"metadata"`
+	ID        string      `json:"id"`
+	Key       string      `json:"key"`
+	Name      string      `json:"name"`
+	BaseURL   string      `json:"base_url"`
+	APIKey    string      `json:"api_key,omitempty"`
+	IsBuiltin bool        `json:"is_builtin"`
+	IsEnabled bool        `json:"is_enabled"`
+	SortOrder int         `json:"sort_order"`
+	Metadata  JSON        `json:"metadata"`
 	Models    []*LLMModel `json:"models,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time   `json:"created_at"`
+	UpdatedAt time.Time   `json:"updated_at"`
 }
 
 // MaskedAPIKey 返回脱敏后的 API Key（仅显示末4位）
