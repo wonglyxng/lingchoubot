@@ -8,7 +8,63 @@ import type { WorkflowRun, WorkflowStep, Project } from "@/lib/types";
 import { StatusBadge } from "@/components/StatusBadge";
 import { FormModal, FormField, selectClass } from "@/components/FormModal";
 import { getWorkflowStatus, formatTime, relativeTime } from "@/lib/utils";
-import { useEventStream } from "@/lib/useEventStream";
+import { useEventStream, type SSEEvent } from "@/lib/useEventStream";
+
+function stepsEqual(left: WorkflowStep[], right: WorkflowStep[]) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((step, index) => {
+    const other = right[index];
+    return other
+      && step.id === other.id
+      && step.status === other.status
+      && step.summary === other.summary
+      && step.error === other.error
+      && step.sort_order === other.sort_order
+      && step.started_at === other.started_at
+      && step.completed_at === other.completed_at;
+  });
+}
+
+function mergeRunList(existing: WorkflowRun[], updated: WorkflowRun) {
+  let found = false;
+  const next = existing.map((run) => {
+    if (run.id !== updated.id) {
+      return run;
+    }
+
+    found = true;
+    return { ...run, ...updated };
+  });
+
+  return found ? next : [updated, ...existing];
+}
+
+function extractRunID(event: SSEEvent) {
+  if (!event.data || typeof event.data !== "object") {
+    return null;
+  }
+
+  const maybeAudit = event.data as { after_state?: unknown };
+  let afterState = maybeAudit.after_state;
+
+  if (typeof afterState === "string") {
+    try {
+      afterState = JSON.parse(afterState) as unknown;
+    } catch {
+      return null;
+    }
+  }
+
+  if (!afterState || typeof afterState !== "object") {
+    return null;
+  }
+
+  const runID = (afterState as Record<string, unknown>).run_id;
+  return typeof runID === "string" && runID.length > 0 ? runID : null;
+}
 
 function stepStatusVariant(status: string) {
   switch (status) {
@@ -55,20 +111,31 @@ function RunCard({
   expanded,
   onToggle,
   onRunUpdated,
+  liveUpdatesEnabled,
 }: {
   run: WorkflowRun;
   expanded: boolean;
   onToggle: () => void;
   onRunUpdated?: (run: WorkflowRun) => void;
+  liveUpdatesEnabled: boolean;
 }) {
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
   const [loadingSteps, setLoadingSteps] = useState(false);
   const [resuming, setResuming] = useState(false);
   const st = getWorkflowStatus(run.status);
   const isRunning = run.status === "running" || run.status === "pending";
-  const shouldPoll = isRunning || run.status === "waiting_approval";
+  const shouldPoll = !liveUpdatesEnabled && isRunning;
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const canResume = run.status === "waiting_manual_intervention" || run.status === "waiting_approval";
+
+  useEffect(() => {
+    const nextSteps = Array.isArray(run.steps) ? run.steps : [];
+    if (nextSteps.length === 0) {
+      return;
+    }
+
+    setSteps((current) => (stepsEqual(current, nextSteps) ? current : nextSteps));
+  }, [run.steps]);
 
   const handleResume = async () => {
     setResuming(true);
@@ -88,29 +155,51 @@ function RunCard({
   useEffect(() => {
     if (!expanded) return;
 
-    const fetchData = () => {
-      api.workflows.get(run.id).then((updated) => {
+    const fetchData = async (showLoading: boolean) => {
+      if (showLoading) {
+        setLoadingSteps(true);
+      }
+
+      try {
+        const updated = await api.workflows.get(run.id);
+        const nextSteps = Array.isArray(updated.steps) ? updated.steps : [];
+
+        setSteps((current) => (stepsEqual(current, nextSteps) ? current : nextSteps));
         if (updated) {
-          setSteps(Array.isArray(updated.steps) ? updated.steps : []);
-          if (updated.status !== run.status) {
+          if (
+            updated.status !== run.status
+            || updated.summary !== run.summary
+            || updated.error !== run.error
+          ) {
             onRunUpdated?.(updated);
           }
         }
-      }).catch(() => setSteps([]));
+      } catch {
+        if (showLoading) {
+          setSteps([]);
+        }
+      } finally {
+        if (showLoading) {
+          setLoadingSteps(false);
+        }
+      }
     };
 
-    setLoadingSteps(true);
-    fetchData();
-    setLoadingSteps(false);
+    void fetchData(true);
 
     if (shouldPoll) {
-      pollRef.current = setInterval(fetchData, 2000);
+      pollRef.current = setInterval(() => {
+        void fetchData(false);
+      }, 2000);
     }
 
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
     };
-  }, [expanded, run.id, run.status, shouldPoll, onRunUpdated]);
+  }, [expanded, run.id, run.status, run.summary, run.error, shouldPoll, onRunUpdated]);
 
   return (
     <div className="rounded-lg border border-gray-200 bg-white">
@@ -176,7 +265,7 @@ function RunCard({
           )}
           {!loadingSteps && steps.length > 0 && (
             <div className="space-y-2">
-              {steps
+              {[...steps]
                 .sort((a, b) => a.sort_order - b.sort_order)
                 .map((s) => (
                   <StepRow key={s.id} step={s} />
@@ -219,33 +308,80 @@ export default function WorkflowsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState("");
+  const eventRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const load = useCallback(() => {
-    setLoading(true);
-    setError(null);
+  const loadRuns = useCallback(async (showLoading: boolean) => {
+    if (showLoading) {
+      setLoading(true);
+      setError(null);
+    }
+
     api.workflows
       .list({ limit: 50 })
       .then((res) => setRuns(res.items))
-      .catch((e: Error) => setError(e.message || "加载失败"))
-      .finally(() => setLoading(false));
+      .catch((e: Error) => {
+        if (showLoading) {
+          setError(e.message || "加载失败");
+        }
+      })
+      .finally(() => {
+        if (showLoading) {
+          setLoading(false);
+        }
+      });
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    void loadRuns(true);
+  }, [loadRuns]);
+
+  useEffect(() => () => {
+    if (eventRefreshRef.current) {
+      clearTimeout(eventRefreshRef.current);
+      eventRefreshRef.current = null;
+    }
+  }, []);
+
+  const scheduleListRefresh = useCallback(() => {
+    if (eventRefreshRef.current) {
+      return;
+    }
+
+    eventRefreshRef.current = setTimeout(() => {
+      eventRefreshRef.current = null;
+      void loadRuns(false);
+    }, 300);
+  }, [loadRuns]);
+
+  const refreshSingleRun = useCallback((runID: string) => {
+    api.workflows
+      .get(runID)
+      .then((updated) => {
+        setRuns((current) => mergeRunList(current, updated));
+      })
+      .catch(() => {
+        scheduleListRefresh();
+      });
+  }, [scheduleListRefresh]);
 
   // SSE real-time updates: refresh list on any workflow event
   const topics = useMemo(() => ["workflow"], []);
-  const onEvent = useCallback(() => {
-    // Refresh full list when workflow events arrive
-    api.workflows
-      .list({ limit: 50 })
-      .then((res) => setRuns(res.items))
-      .catch(() => {});
-  }, []);
+  const onEvent = useCallback((event: SSEEvent) => {
+    const runID = extractRunID(event);
+    if (runID) {
+      refreshSingleRun(runID);
+      return;
+    }
+
+    scheduleListRefresh();
+  }, [refreshSingleRun, scheduleListRefresh]);
 
   const { connected, mode } = useEventStream({
     topics,
     onEvent,
-    onPoll: load,
+    onPoll: () => {
+      void loadRuns(false);
+    },
     pollInterval: 5000,
   });
 
@@ -278,9 +414,7 @@ export default function WorkflowsPage() {
   };
 
   const handleRunUpdated = useCallback((updated: WorkflowRun) => {
-    setRuns((prev) =>
-      prev.map((r) => (r.id === updated.id ? { ...r, status: updated.status, summary: updated.summary, error: updated.error, steps: updated.steps } : r))
-    );
+    setRuns((prev) => mergeRunList(prev, updated));
   }, []);
 
   return (
@@ -364,6 +498,7 @@ export default function WorkflowsPage() {
               key={r.id}
               run={r}
               expanded={expandedId === r.id}
+              liveUpdatesEnabled={connected && mode === "sse"}
               onToggle={() =>
                 setExpandedId((prev) => (prev === r.id ? null : r.id))
               }

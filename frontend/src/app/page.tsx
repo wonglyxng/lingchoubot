@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import {
   Activity,
@@ -35,6 +35,7 @@ export default function Home() {
   const [pendingApprovals, setPendingApprovals] = useState<ApprovalRequest[]>([]);
   const [recentAudit, setRecentAudit] = useState<AuditLog[]>([]);
   const [manualRuns, setManualRuns] = useState<WorkflowRun[]>([]);
+  const refreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchDashboard = useCallback(() => {
     api.workflows.list({ status: "running", limit: 10 })
@@ -72,11 +73,29 @@ export default function Home() {
     fetchDashboard();
   }, [fetchDashboard]);
 
+  useEffect(() => () => {
+    if (refreshRef.current) {
+      clearTimeout(refreshRef.current);
+      refreshRef.current = null;
+    }
+  }, []);
+
+  const scheduleDashboardRefresh = useCallback(() => {
+    if (refreshRef.current) {
+      return;
+    }
+
+    refreshRef.current = setTimeout(() => {
+      refreshRef.current = null;
+      fetchDashboard();
+    }, 300);
+  }, [fetchDashboard]);
+
   // SSE real-time updates for dashboard
   const topics = useMemo(() => ["workflow", "approval", "audit", "tool_call"], []);
   const onEvent = useCallback(() => {
-    fetchDashboard();
-  }, [fetchDashboard]);
+    scheduleDashboardRefresh();
+  }, [scheduleDashboardRefresh]);
 
   const { connected, mode } = useEventStream({
     topics,
