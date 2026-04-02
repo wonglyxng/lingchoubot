@@ -14,8 +14,8 @@ export interface AgentLLMProviderOption {
   models: AgentLLMModelOption[];
 }
 
-export const DEFAULT_AGENT_LLM_PROVIDER = "openai";
-export const DEFAULT_AGENT_LLM_MODEL = "gpt-4.1-mini";
+export const DEFAULT_AGENT_LLM_PROVIDER = "deepseek";
+export const DEFAULT_AGENT_LLM_MODEL = "deepseek-chat";
 
 // Hardcoded fallback list — used only when API hasn't returned yet or fails
 export const agentLLMProviderOptions: AgentLLMProviderOption[] = [

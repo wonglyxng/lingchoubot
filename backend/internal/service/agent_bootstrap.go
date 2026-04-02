@@ -13,7 +13,7 @@ type BaselineAgentSpec struct {
 }
 
 func defaultBaselineAgentMetadata() model.JSON {
-	return model.JSON(`{"llm":{"provider":"openai","model":"gpt-4.1-mini"}}`)
+	return model.JSON(fmt.Sprintf(`{"llm":{"provider":"%s","model":"%s"}}`, model.DefaultAgentLLMProvider, model.DefaultAgentLLMModel))
 }
 
 // BaselineAgentSpecs returns the minimal built-in agent set required for the MVP workflow.

@@ -414,7 +414,7 @@ func mustCreateAgentFull(name, role, roleCode string, managedRoles []string, rep
 		"metadata":       map[string]any{},
 	}
 	if agentType == "llm" {
-		body["metadata"] = map[string]any{"llm": map[string]any{"provider": "openai", "model": "gpt-4.1-mini"}}
+		body["metadata"] = map[string]any{"llm": map[string]any{"provider": "deepseek", "model": "deepseek-chat"}}
 	}
 	if roleCode != "" {
 		body["role_code"] = roleCode
@@ -477,7 +477,7 @@ func mustEnsureAgentFull(name, role, roleCode string, managedRoles []string, rep
 		"metadata":       map[string]any{},
 	}
 	if agentType == "llm" {
-		body["metadata"] = map[string]any{"llm": map[string]any{"provider": "openai", "model": "gpt-4.1-mini"}}
+		body["metadata"] = map[string]any{"llm": map[string]any{"provider": "deepseek", "model": "deepseek-chat"}}
 	}
 	if reportsTo != "" {
 		body["reports_to"] = reportsTo

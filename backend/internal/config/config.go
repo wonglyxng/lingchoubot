@@ -125,9 +125,9 @@ func Load() *Config {
 }
 
 func loadLLMConfig() LLMConfig {
-	globalBaseURL := getEnv("LLM_BASE_URL", "https://api.openai.com/v1")
+	globalBaseURL := getEnv("LLM_BASE_URL", "https://api.deepseek.com/v1")
 	globalAPIKey := getEnv("LLM_API_KEY", "")
-	globalModel := getEnv("LLM_MODEL", "gpt-4o-mini")
+	globalModel := getEnv("LLM_MODEL", "deepseek-chat")
 
 	roleKeys := []struct {
 		envPrefix string

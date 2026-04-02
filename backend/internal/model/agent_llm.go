@@ -19,8 +19,8 @@ const (
 )
 
 const (
-	DefaultAgentLLMProvider AgentLLMProvider = AgentLLMProviderOpenAI
-	DefaultAgentLLMModel    string           = "gpt-4.1-mini"
+	DefaultAgentLLMProvider AgentLLMProvider = AgentLLMProviderDeepSeek
+	DefaultAgentLLMModel    string           = "deepseek-chat"
 )
 
 type AgentLLMConfig struct {

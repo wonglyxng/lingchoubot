@@ -161,8 +161,11 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.LLM.FallbackEnabled {
 		t.Error("LLM fallback should be disabled by default")
 	}
-	if cfg.LLM.Model != "gpt-4o-mini" {
-		t.Errorf("expected default LLM model gpt-4o-mini, got %s", cfg.LLM.Model)
+	if cfg.LLM.BaseURL != "https://api.deepseek.com/v1" {
+		t.Errorf("expected default LLM base URL https://api.deepseek.com/v1, got %s", cfg.LLM.BaseURL)
+	}
+	if cfg.LLM.Model != "deepseek-chat" {
+		t.Errorf("expected default LLM model deepseek-chat, got %s", cfg.LLM.Model)
 	}
 	if cfg.LLM.Providers["openai"].BaseURL != "https://api.openai.com/v1" {
 		t.Errorf("expected default OpenAI base URL, got %s", cfg.LLM.Providers["openai"].BaseURL)
