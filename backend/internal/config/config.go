@@ -17,7 +17,7 @@ type Config struct {
 
 type LLMConfig struct {
 	Enabled         bool
-	FallbackEnabled bool // 当 LLM 调用失败时，是否自动降级到 MockRunner
+	FallbackEnabled bool // deprecated: fallback 已停用，保留字段仅为兼容旧配置
 	BaseURL         string
 	APIKey          string
 	Model           string
@@ -153,7 +153,7 @@ func loadLLMConfig() LLMConfig {
 
 	return LLMConfig{
 		Enabled:         getEnv("LLM_ENABLED", "false") == "true",
-		FallbackEnabled: getEnv("LLM_FALLBACK_ENABLED", "true") == "true",
+		FallbackEnabled: getEnv("LLM_FALLBACK_ENABLED", "false") == "true",
 		BaseURL:         globalBaseURL,
 		APIKey:          globalAPIKey,
 		Model:           globalModel,

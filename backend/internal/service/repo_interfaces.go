@@ -66,6 +66,7 @@ type TaskAssignmentRepository interface {
 
 type ArtifactRepository interface {
 	Create(ctx context.Context, a *model.Artifact) error
+	Delete(ctx context.Context, id string) error
 	GetByID(ctx context.Context, id string) (*model.Artifact, error)
 	List(ctx context.Context, p repository.ArtifactListParams) ([]*model.Artifact, int, error)
 }

@@ -14,6 +14,7 @@ func TestAgentServiceCreateDefaultsRoleCodeBySpecialization(t *testing.T) {
 		specialization model.AgentSpecialization
 		want           model.RoleCode
 	}{
+		{name: "general worker", role: model.AgentRoleWorker, specialization: model.AgentSpecGeneral, want: model.RoleCodeGeneralWorker},
 		{name: "frontend worker", role: model.AgentRoleWorker, specialization: model.AgentSpecFrontend, want: model.RoleCodeFrontendDevWorker},
 		{name: "backend worker", role: model.AgentRoleWorker, specialization: model.AgentSpecBackend, want: model.RoleCodeBackendDevWorker},
 		{name: "qa worker", role: model.AgentRoleWorker, specialization: model.AgentSpecQA, want: model.RoleCodeQAWorker},
@@ -30,7 +31,7 @@ func TestAgentServiceCreateDefaultsRoleCodeBySpecialization(t *testing.T) {
 				Name:           "Spec Agent",
 				Role:           tt.role,
 				Specialization: tt.specialization,
-				AgentType:      model.AgentTypeMock,
+				AgentType:      model.AgentTypeLLM,
 			}
 
 			if err := svc.Create(ctx, agent); err != nil {

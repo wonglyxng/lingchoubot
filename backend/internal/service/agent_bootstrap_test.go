@@ -131,6 +131,10 @@ func TestEnsureBaselineAgentsCreatesHierarchy(t *testing.T) {
 	if reviewer == nil || reviewer.ReportsTo == nil || *reviewer.ReportsTo != qaSup.ID {
 		t.Fatal("reviewer should report to QA supervisor")
 	}
+	generalWorker := byRoleCode[model.RoleCodeGeneralWorker]
+	if generalWorker == nil || generalWorker.ReportsTo == nil || *generalWorker.ReportsTo != devSup.ID {
+		t.Fatal("general worker should report to development supervisor")
+	}
 	frontend := byRoleCode[model.RoleCodeFrontendDevWorker]
 	if frontend == nil || frontend.ReportsTo == nil || *frontend.ReportsTo != devSup.ID {
 		t.Fatal("frontend worker should report to development supervisor")

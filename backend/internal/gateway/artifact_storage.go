@@ -21,10 +21,11 @@ type ArtifactStorageTool struct {
 	client *minio.Client
 	bucket string
 	logger *slog.Logger
+	initErr error
 }
 
 // NewArtifactStorageTool creates the tool and eagerly tries to ensure the
-// target bucket exists. Failure is logged but not fatal (fallback mode).
+// target bucket exists. Initialization errors are retained and surfaced at execution time.
 func NewArtifactStorageTool(cfg config.MinIOConfig, logger *slog.Logger) *ArtifactStorageTool {
 	t := &ArtifactStorageTool{bucket: cfg.Bucket, logger: logger}
 
@@ -33,7 +34,8 @@ func NewArtifactStorageTool(cfg config.MinIOConfig, logger *slog.Logger) *Artifa
 		Secure: cfg.UseSSL,
 	})
 	if err != nil {
-		logger.Warn("minio client init failed, using fallback mode", "error", err)
+		t.initErr = fmt.Errorf("minio client init failed: %w", err)
+		logger.Error("minio client init failed", "error", err)
 		return t
 	}
 
@@ -42,7 +44,8 @@ func NewArtifactStorageTool(cfg config.MinIOConfig, logger *slog.Logger) *Artifa
 
 	exists, err := client.BucketExists(ctx, cfg.Bucket)
 	if err != nil {
-		logger.Warn("minio bucket check failed, using fallback mode", "error", err)
+		t.initErr = fmt.Errorf("minio bucket check failed: %w", err)
+		logger.Error("minio bucket check failed", "error", err)
 		return t
 	}
 	if !exists {
@@ -111,11 +114,11 @@ func (t *ArtifactStorageTool) Store(ctx context.Context, name, content, contentT
 	checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(content)))
 	objectKey := fmt.Sprintf("%s/%s", time.Now().Format("20060102"), name)
 
-	// If no MinIO client, fall back to mock URI.
 	if t.client == nil {
-		uri := fmt.Sprintf("mock://minio/%s/%s", t.bucket, objectKey)
-		t.logger.Info("artifact stored (fallback)", "uri", uri)
-		return uri, int64(len(content)), checksum, nil
+		if t.initErr != nil {
+			return "", 0, "", fmt.Errorf("artifact storage unavailable: %w", t.initErr)
+		}
+		return "", 0, "", fmt.Errorf("artifact storage unavailable: minio client not initialized")
 	}
 
 	reader := strings.NewReader(content)
@@ -144,11 +147,12 @@ func (t *ArtifactStorageTool) buildResult(uri, name, contentType string, size in
 	}
 }
 
-// NewMockArtifactStorageTool returns a tool instance without MinIO connectivity,
-// useful for testing.
+// NewMockArtifactStorageTool returns an unavailable storage tool for tests that
+// only need interface coverage or explicit failure behavior.
 func NewMockArtifactStorageTool() *ArtifactStorageTool {
 	return &ArtifactStorageTool{
-		bucket: "lingchou-artifacts",
-		logger: slog.Default(),
+		bucket:  "lingchou-artifacts",
+		logger:  slog.Default(),
+		initErr: fmt.Errorf("artifact storage unavailable in test stub"),
 	}
 }

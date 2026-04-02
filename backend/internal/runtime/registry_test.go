@@ -18,7 +18,7 @@ func TestRegistryGetForSpec(t *testing.T) {
 		{"specialized backend", "worker", "backend", false},
 		{"specialized frontend", "worker", "frontend", false},
 		{"specialized qa", "worker", "qa", false},
-		{"unregistered spec falls back", "worker", "release", false},
+		{"unregistered spec fails", "worker", "release", true},
 		{"unknown role", "unknown", "", true},
 	}
 

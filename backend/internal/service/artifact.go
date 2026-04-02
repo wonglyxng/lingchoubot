@@ -53,6 +53,25 @@ func (s *ArtifactService) Create(ctx context.Context, a *model.Artifact) error {
 	return nil
 }
 
+// CreateWithInitialVersion persists an artifact and its first version as one logical unit.
+// If creating the initial version fails, the artifact record is rolled back.
+func (s *ArtifactService) CreateWithInitialVersion(ctx context.Context, a *model.Artifact, v *model.ArtifactVersion) error {
+	if err := s.Create(ctx, a); err != nil {
+		return err
+	}
+	if v == nil {
+		return nil
+	}
+	v.ArtifactID = a.ID
+	if err := s.AddVersion(ctx, v); err != nil {
+		if delErr := s.repo.Delete(ctx, a.ID); delErr != nil {
+			return fmt.Errorf("create artifact version: %w (rollback failed: %v)", err, delErr)
+		}
+		return fmt.Errorf("create artifact version: %w", err)
+	}
+	return nil
+}
+
 func (s *ArtifactService) GetByID(ctx context.Context, id string) (*model.Artifact, error) {
 	return s.repo.GetByID(ctx, id)
 }

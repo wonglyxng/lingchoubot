@@ -504,9 +504,18 @@ func (e *Engine) runSupervisor(ctx context.Context, rc *runCtx, proj *model.Proj
 		return fmt.Errorf("supervisor failed: %s", output.Error)
 	}
 
-	e.processContractActions(ctx, task.ID, output.Contracts)
-	e.processAssignmentActions(ctx, task.ID, agent.ID, output.Assignments)
-	e.processTransitionActions(ctx, task, output.Transitions)
+	if err := e.processContractActions(ctx, task.ID, output.Contracts); err != nil {
+		_ = e.workflow.FailStep(ctx, step, err.Error())
+		return err
+	}
+	if err := e.processAssignmentActions(ctx, task, agent.ID, output.Assignments); err != nil {
+		_ = e.workflow.FailStep(ctx, step, err.Error())
+		return err
+	}
+	if err := e.processTransitionActions(ctx, task, output.Transitions); err != nil {
+		_ = e.workflow.FailStep(ctx, step, err.Error())
+		return err
+	}
 
 	_ = e.workflow.CompleteStep(ctx, step, output.Summary)
 	return nil
@@ -580,9 +589,18 @@ func (e *Engine) runWorker(ctx context.Context, rc *runCtx, proj *model.Project,
 		return fmt.Errorf("worker failed: %s", output.Error)
 	}
 
-	e.processArtifactActions(ctx, proj.ID, task.ID, agent.ID, output.Artifacts)
-	e.processHandoffActions(ctx, task.ID, agent.ID, output.Handoffs)
-	e.processTransitionActions(ctx, task, output.Transitions)
+	if err := e.processArtifactActions(ctx, proj.ID, task.ID, agent.ID, output.Artifacts); err != nil {
+		_ = e.workflow.FailStep(ctx, step, err.Error())
+		return err
+	}
+	if err := e.processHandoffActions(ctx, task.ID, agent.ID, output.Handoffs); err != nil {
+		_ = e.workflow.FailStep(ctx, step, err.Error())
+		return err
+	}
+	if err := e.processTransitionActions(ctx, task, output.Transitions); err != nil {
+		_ = e.workflow.FailStep(ctx, step, err.Error())
+		return err
+	}
 
 	_ = e.workflow.CompleteStep(ctx, step, output.Summary)
 	return nil
@@ -644,7 +662,10 @@ func (e *Engine) runReviewer(ctx context.Context, rc *runCtx, proj *model.Projec
 		return fmt.Errorf("reviewer failed: %s", output.Error)
 	}
 
-	e.processReviewActions(ctx, rc.run.ID, task.ID, agent.ID, artifactCtxs, output.Reviews)
+	if err := e.processReviewActions(ctx, rc.run.ID, task.ID, agent.ID, artifactCtxs, output.Reviews); err != nil {
+		_ = e.workflow.FailStep(ctx, step, err.Error())
+		return err
+	}
 
 	_ = e.workflow.CompleteStep(ctx, step, output.Summary)
 	return nil
@@ -694,7 +715,7 @@ func (e *Engine) processTaskActions(ctx context.Context, projectID string, phase
 	return nil
 }
 
-func (e *Engine) processContractActions(ctx context.Context, taskID string, actions []runtime.ContractAction) {
+func (e *Engine) processContractActions(ctx context.Context, taskID string, actions []runtime.ContractAction) error {
 	for _, a := range actions {
 		nonGoals, _ := json.Marshal(a.NonGoals)
 		doneDef, _ := json.Marshal(a.DoneDefinition)
@@ -710,33 +731,39 @@ func (e *Engine) processContractActions(ctx context.Context, taskID string, acti
 			AcceptanceCriteria: model.JSON(accCrit),
 		}
 		if err := e.services.Contract.Create(ctx, contract); err != nil {
-			e.logger.Error("create contract failed", "task", taskID, "error", err)
+			return fmt.Errorf("create contract for task %s: %w", taskID, err)
 		}
 	}
+	return nil
 }
 
-func (e *Engine) processAssignmentActions(ctx context.Context, taskID, assignedBy string, actions []runtime.AssignmentAction) {
+func (e *Engine) processAssignmentActions(ctx context.Context, task *model.Task, assignedBy string, actions []runtime.AssignmentAction) error {
 	for _, a := range actions {
-		workerAgent, err := e.findAgentWithSpec(ctx, model.AgentRole(a.AgentRole), model.AgentSpecGeneral)
+		spec := model.AgentSpecGeneral
+		if model.AgentRole(a.AgentRole) == model.AgentRoleWorker {
+			spec = inferSpecialization(task)
+		}
+		workerAgent, err := e.findAgentWithSpec(ctx, model.AgentRole(a.AgentRole), spec)
 		if err != nil {
-			e.logger.Error("find agent for assignment", "role", a.AgentRole, "error", err)
-			continue
+			return fmt.Errorf("find agent for assignment (%s/%s): %w", a.AgentRole, spec, err)
 		}
 		assignment := &model.TaskAssignment{
-			TaskID:     taskID,
+			TaskID:     task.ID,
 			AgentID:    workerAgent.ID,
 			AssignedBy: &assignedBy,
 			Role:       model.AssignmentRole(a.Role),
 			Note:       a.Note,
 		}
 		if err := e.services.Assignment.Create(ctx, assignment); err != nil {
-			e.logger.Error("create assignment failed", "task", taskID, "error", err)
+			return fmt.Errorf("create assignment for task %s: %w", task.ID, err)
 		}
 	}
+	return nil
 }
 
-func (e *Engine) processArtifactActions(ctx context.Context, projectID, taskID, agentID string, actions []runtime.ArtifactAction) {
+func (e *Engine) processArtifactActions(ctx context.Context, projectID, taskID, agentID string, actions []runtime.ArtifactAction) error {
 	for _, a := range actions {
+		metaBytes, _ := json.Marshal(a.Metadata)
 		artifact := &model.Artifact{
 			ProjectID:    projectID,
 			TaskID:       &taskID,
@@ -745,30 +772,24 @@ func (e *Engine) processArtifactActions(ctx context.Context, projectID, taskID, 
 			Description:  a.Description,
 			CreatedBy:    &agentID,
 		}
-		if err := e.services.Artifact.Create(ctx, artifact); err != nil {
-			e.logger.Error("create artifact failed", "name", a.Name, "error", err)
-			continue
-		}
-
-		metaBytes, _ := json.Marshal(a.Metadata)
 		version := &model.ArtifactVersion{
-			ArtifactID:    artifact.ID,
 			URI:           a.URI,
 			ContentType:   a.ContentType,
 			SizeBytes:     a.SizeBytes,
-			ChangeSummary: "初始版本（Mock 生成）",
+			ChangeSummary: "初始版本（Agent 生成）",
 			CreatedBy:     &agentID,
 			Metadata:      model.JSON(metaBytes),
 			Content:       a.Content,
 			SourceName:    a.Name,
 		}
-		if err := e.services.Artifact.AddVersion(ctx, version); err != nil {
-			e.logger.Error("add artifact version failed", "artifact", artifact.ID, "error", err)
+		if err := e.services.Artifact.CreateWithInitialVersion(ctx, artifact, version); err != nil {
+			return fmt.Errorf("create artifact %s with initial version: %w", a.Name, err)
 		}
 	}
+	return nil
 }
 
-func (e *Engine) processHandoffActions(ctx context.Context, taskID, agentID string, actions []runtime.HandoffAction) {
+func (e *Engine) processHandoffActions(ctx context.Context, taskID, agentID string, actions []runtime.HandoffAction) error {
 	for _, a := range actions {
 		completedItems, _ := json.Marshal(a.CompletedItems)
 		pendingItems, _ := json.Marshal(a.PendingItems)
@@ -785,12 +806,13 @@ func (e *Engine) processHandoffActions(ctx context.Context, taskID, agentID stri
 			NextSteps:      model.JSON(nextSteps),
 		}
 		if err := e.services.Handoff.Create(ctx, snapshot); err != nil {
-			e.logger.Error("create handoff failed", "task", taskID, "error", err)
+			return fmt.Errorf("create handoff for task %s: %w", taskID, err)
 		}
 	}
+	return nil
 }
 
-func (e *Engine) processReviewActions(ctx context.Context, runID, taskID, reviewerID string, artifactCtxs []runtime.ArtifactCtx, actions []runtime.ReviewAction) {
+func (e *Engine) processReviewActions(ctx context.Context, runID, taskID, reviewerID string, artifactCtxs []runtime.ArtifactCtx, actions []runtime.ReviewAction) error {
 	for _, a := range actions {
 		findings, _ := json.Marshal(a.Findings)
 		recommendations, _ := json.Marshal(a.Recommendations)
@@ -810,9 +832,10 @@ func (e *Engine) processReviewActions(ctx context.Context, runID, taskID, review
 			Metadata:          model.JSON(metadataBytes),
 		}
 		if err := e.services.Review.Create(ctx, report); err != nil {
-			e.logger.Error("create review failed", "task", taskID, "error", err)
+			return fmt.Errorf("create review for task %s: %w", taskID, err)
 		}
 	}
+	return nil
 }
 
 func (e *Engine) loadTaskArtifactContexts(ctx context.Context, taskID string) ([]runtime.ArtifactCtx, error) {
@@ -886,13 +909,14 @@ func extractInlineContent(raw model.JSON) string {
 	return ""
 }
 
-func (e *Engine) processTransitionActions(ctx context.Context, task *model.Task, actions []runtime.TransitionAction) {
+func (e *Engine) processTransitionActions(ctx context.Context, task *model.Task, actions []runtime.TransitionAction) error {
 	for _, a := range actions {
 		newStatus := model.TaskStatus(a.NewStatus)
 		if err := e.services.Task.TransitionStatus(ctx, task.ID, newStatus); err != nil {
-			e.logger.Warn("transition failed", "task", task.Title, "to", a.NewStatus, "error", err)
+			return fmt.Errorf("transition task %s to %s: %w", task.ID, a.NewStatus, err)
 		}
 	}
+	return nil
 }
 
 // findAgent locates the first active agent with the given role.
@@ -907,19 +931,8 @@ func (e *Engine) findAgentWithSpec(ctx context.Context, role model.AgentRole, sp
 	if err != nil {
 		return nil, fmt.Errorf("find agent (%s/%s): %w", role, spec, err)
 	}
-	if agent != nil {
+	if agent != nil && agent.Specialization == spec {
 		return agent, nil
-	}
-
-	// Fallback: scan all agents (backward compatibility for unspecialized setups)
-	agents, _, err := e.services.Agent.List(ctx, 100, 0)
-	if err != nil {
-		return nil, fmt.Errorf("list agents: %w", err)
-	}
-	for _, a := range agents {
-		if a.Role == role && a.Status == model.AgentStatusActive {
-			return a, nil
-		}
 	}
 	return nil, fmt.Errorf("no active agent with role %q (specialization %q) found", role, spec)
 }
@@ -934,7 +947,6 @@ func (e *Engine) findSupervisorByDomain(ctx context.Context, domain model.Execut
 	case model.ExecDomainQA:
 		roleCode = model.RoleCodeQASupervisor
 	default:
-		// general → fall back to any supervisor
 		return e.findAgent(ctx, model.AgentRoleSupervisor)
 	}
 	agent, err := e.services.Agent.FindByRoleCode(ctx, roleCode)
@@ -944,9 +956,7 @@ func (e *Engine) findSupervisorByDomain(ctx context.Context, domain model.Execut
 	if agent != nil {
 		return agent, nil
 	}
-	// Fallback: any supervisor
-	e.logger.Warn("no supervisor with role_code, falling back", "role_code", roleCode)
-	return e.findAgent(ctx, model.AgentRoleSupervisor)
+	return nil, fmt.Errorf("no active supervisor with role_code %q found", roleCode)
 }
 
 // inferExecutionDomain determines the task's execution domain from its content.

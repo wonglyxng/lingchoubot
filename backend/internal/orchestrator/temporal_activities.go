@@ -248,9 +248,18 @@ func (a *Activities) ActivitySupervisor(ctx context.Context, input TaskChainInpu
 	}
 
 	eng := &Engine{registry: a.Registry, services: a.Services, workflow: a.Workflow, logger: a.Logger}
-	eng.processContractActions(ctx, task.ID, output.Contracts)
-	eng.processAssignmentActions(ctx, task.ID, agent.ID, output.Assignments)
-	eng.processTransitionActions(ctx, task, output.Transitions)
+	if err := eng.processContractActions(ctx, task.ID, output.Contracts); err != nil {
+		st.fail(ctx, err.Error())
+		return nil, err
+	}
+	if err := eng.processAssignmentActions(ctx, task, agent.ID, output.Assignments); err != nil {
+		st.fail(ctx, err.Error())
+		return nil, err
+	}
+	if err := eng.processTransitionActions(ctx, task, output.Transitions); err != nil {
+		st.fail(ctx, err.Error())
+		return nil, err
+	}
 
 	st.complete(ctx, output.Summary)
 	return &StepResult{Summary: output.Summary, StepCount: sortOrder}, nil
@@ -326,9 +335,18 @@ func (a *Activities) ActivityWorker(ctx context.Context, input TaskChainInput) (
 	}
 
 	eng := &Engine{registry: a.Registry, services: a.Services, workflow: a.Workflow, logger: a.Logger}
-	eng.processArtifactActions(ctx, proj.ID, task.ID, agent.ID, output.Artifacts)
-	eng.processHandoffActions(ctx, task.ID, agent.ID, output.Handoffs)
-	eng.processTransitionActions(ctx, task, output.Transitions)
+	if err := eng.processArtifactActions(ctx, proj.ID, task.ID, agent.ID, output.Artifacts); err != nil {
+		st.fail(ctx, err.Error())
+		return nil, err
+	}
+	if err := eng.processHandoffActions(ctx, task.ID, agent.ID, output.Handoffs); err != nil {
+		st.fail(ctx, err.Error())
+		return nil, err
+	}
+	if err := eng.processTransitionActions(ctx, task, output.Transitions); err != nil {
+		st.fail(ctx, err.Error())
+		return nil, err
+	}
 
 	st.complete(ctx, output.Summary)
 	return &StepResult{Summary: output.Summary, StepCount: sortOrder}, nil
@@ -407,7 +425,10 @@ func (a *Activities) ActivityReviewer(ctx context.Context, input TaskChainInput)
 		return nil, fmt.Errorf("reviewer failed: %s", output.Error)
 	}
 
-	eng.processReviewActions(ctx, input.RunID, task.ID, agent.ID, artifactCtxs, output.Reviews)
+	if err := eng.processReviewActions(ctx, input.RunID, task.ID, agent.ID, artifactCtxs, output.Reviews); err != nil {
+		st.fail(ctx, err.Error())
+		return nil, err
+	}
 
 	st.complete(ctx, output.Summary)
 	return &StepResult{Summary: output.Summary, StepCount: sortOrder}, nil
@@ -471,18 +492,8 @@ func (a *Activities) findAgentWithSpec(ctx context.Context, role model.AgentRole
 	if err != nil {
 		return nil, fmt.Errorf("find agent (%s/%s): %w", role, spec, err)
 	}
-	if agent != nil {
+	if agent != nil && agent.Specialization == spec {
 		return agent, nil
-	}
-
-	agents, _, err := a.Services.Agent.List(ctx, 100, 0)
-	if err != nil {
-		return nil, fmt.Errorf("list agents: %w", err)
-	}
-	for _, ag := range agents {
-		if ag.Role == role && ag.Status == model.AgentStatusActive {
-			return ag, nil
-		}
 	}
 	return nil, fmt.Errorf("no active agent with role %q (specialization %q) found", role, spec)
 }
@@ -505,6 +516,5 @@ func (a *Activities) findSupervisorByDomain(ctx context.Context, domain model.Ex
 	if agent != nil {
 		return agent, nil
 	}
-	a.Logger.Warn("no supervisor with role_code, falling back", "role_code", roleCode)
-	return a.findAgent(ctx, model.AgentRoleSupervisor)
+	return nil, fmt.Errorf("no active supervisor with role_code %q found", roleCode)
 }

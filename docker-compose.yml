@@ -64,8 +64,8 @@ services:
       MINIO_SECRET_KEY: lingchou_minio_dev
       MINIO_BUCKET: lingchou-artifacts
       MINIO_USE_SSL: "false"
-      # LLM 配置（设为 true 并提供 API Key 启用真实 LLM Agent）
-      LLM_ENABLED: "${LLM_ENABLED:-false}"
+      # LLM 配置（严格模式：必须启用真实 LLM，未配置时工作流链路会拒绝启动）
+      LLM_ENABLED: "${LLM_ENABLED:-true}"
       LLM_BASE_URL: "${LLM_BASE_URL:-https://api.openai.com/v1}"
       LLM_API_KEY: "${LLM_API_KEY:-}"
       LLM_MODEL: "${LLM_MODEL:-gpt-4o-mini}"
@@ -98,7 +98,7 @@ services:
       MINIO_SECRET_KEY: lingchou_minio_dev
       MINIO_BUCKET: lingchou-artifacts
       MINIO_USE_SSL: "false"
-      LLM_ENABLED: "${LLM_ENABLED:-false}"
+      LLM_ENABLED: "${LLM_ENABLED:-true}"
       LLM_BASE_URL: "${LLM_BASE_URL:-https://api.openai.com/v1}"
       LLM_API_KEY: "${LLM_API_KEY:-}"
       LLM_MODEL: "${LLM_MODEL:-gpt-4o-mini}"

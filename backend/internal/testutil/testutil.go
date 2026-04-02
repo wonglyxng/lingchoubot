@@ -524,6 +524,14 @@ func (r *FakeArtifactRepo) Create(_ context.Context, a *model.Artifact) error {
 	r.artifacts[cp.ID] = &cp
 	return nil
 }
+
+func (r *FakeArtifactRepo) Delete(_ context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.artifacts, id)
+	return nil
+}
+
 func (r *FakeArtifactRepo) GetByID(_ context.Context, id string) (*model.Artifact, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

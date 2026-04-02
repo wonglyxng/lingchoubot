@@ -24,6 +24,10 @@ func main() {
 		logger.Error("TEMPORAL_ENABLED must be true to run the Temporal worker")
 		os.Exit(1)
 	}
+	if !cfg.LLM.Enabled {
+		logger.Error("LLM_ENABLED must be true; mock runtime has been removed from the workflow chain")
+		os.Exit(1)
+	}
 
 	db, err := repository.NewDB(cfg.Database.DSN(), logger)
 	if err != nil {
@@ -82,41 +86,35 @@ func main() {
 
 	// --- agent runtime ---
 	reg := runtime.NewRegistry()
+	defaultClient := runtime.NewLLMClient(runtime.LLMClientConfig{
+		BaseURL: cfg.LLM.BaseURL,
+		APIKey:  cfg.LLM.APIKey,
+		Model:   cfg.LLM.Model,
+	})
 
-	if cfg.LLM.Enabled {
-		defaultClient := runtime.NewLLMClient(runtime.LLMClientConfig{
-			BaseURL: cfg.LLM.BaseURL,
-			APIKey:  cfg.LLM.APIKey,
-			Model:   cfg.LLM.Model,
-		})
-
-		roleClients := make(map[string]*runtime.LLMClient)
-		for _, role := range []string{"pm", "supervisor", "worker", "reviewer"} {
-			baseURL, apiKey, model := cfg.LLM.ResolveForRole(role)
-			if baseURL != cfg.LLM.BaseURL || apiKey != cfg.LLM.APIKey || model != cfg.LLM.Model {
-				roleClients[role] = runtime.NewLLMClient(runtime.LLMClientConfig{
-					BaseURL: baseURL,
-					APIKey:  apiKey,
-					Model:   model,
-				})
-				logger.Info("role-specific LLM configured", "role", role, "model", model)
-			}
+	roleClients := make(map[string]*runtime.LLMClient)
+	for _, role := range []string{"pm", "supervisor", "worker", "reviewer"} {
+		baseURL, apiKey, model := cfg.LLM.ResolveForRole(role)
+		if baseURL != cfg.LLM.BaseURL || apiKey != cfg.LLM.APIKey || model != cfg.LLM.Model {
+			roleClients[role] = runtime.NewLLMClient(runtime.LLMClientConfig{
+				BaseURL: baseURL,
+				APIKey:  apiKey,
+				Model:   model,
+			})
+			logger.Info("role-specific LLM configured", "role", role, "model", model)
 		}
-
-		providerConfigs := make(map[string]runtime.LLMClientConfig, len(cfg.LLM.Providers))
-		for provider, providerCfg := range cfg.LLM.Providers {
-			providerConfigs[provider] = runtime.LLMClientConfig{
-				BaseURL: providerCfg.BaseURL,
-				APIKey:  providerCfg.APIKey,
-			}
-		}
-
-		runtime.RegisterLLMRunners(reg, defaultClient, roleClients, providerConfigs, logger)
-		logger.Info("LLM agent runners registered", "model", cfg.LLM.Model, "base_url", cfg.LLM.BaseURL)
-	} else {
-		reg.RegisterDefaults()
-		logger.Info("mock agent runners registered")
 	}
+
+	providerConfigs := make(map[string]runtime.LLMClientConfig, len(cfg.LLM.Providers))
+	for provider, providerCfg := range cfg.LLM.Providers {
+		providerConfigs[provider] = runtime.LLMClientConfig{
+			BaseURL: providerCfg.BaseURL,
+			APIKey:  providerCfg.APIKey,
+		}
+	}
+
+	runtime.RegisterLLMRunners(reg, defaultClient, roleClients, providerConfigs, logger)
+	logger.Info("LLM agent runners registered", "model", cfg.LLM.Model, "base_url", cfg.LLM.BaseURL)
 
 	// --- start Temporal worker ---
 	temporalClient, err := orchestrator.StartTemporalWorker(

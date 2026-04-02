@@ -165,6 +165,8 @@ func defaultRoleCode(role model.AgentRole, spec model.AgentSpecialization) model
 		return model.RoleCodeDevelopmentSupervisor
 	case model.AgentRoleWorker:
 		switch spec {
+		case model.AgentSpecGeneral:
+			return model.RoleCodeGeneralWorker
 		case model.AgentSpecFrontend:
 			return model.RoleCodeFrontendDevWorker
 		case model.AgentSpecQA:

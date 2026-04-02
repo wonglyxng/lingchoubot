@@ -191,6 +191,13 @@ func (r *fakeArtifactRepo) Create(_ context.Context, a *model.Artifact) error {
 	return nil
 }
 
+func (r *fakeArtifactRepo) Delete(_ context.Context, id string) error {
+	if r.artifacts != nil {
+		delete(r.artifacts, id)
+	}
+	return nil
+}
+
 func (r *fakeArtifactRepo) GetByID(_ context.Context, id string) (*model.Artifact, error) {
 	if r.artifacts == nil {
 		return nil, nil

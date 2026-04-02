@@ -110,7 +110,9 @@ func TestValidateOutput_Worker_Valid(t *testing.T) {
 		Summary: "工件产出完成",
 		Artifacts: []ArtifactAction{{
 			Name:         "handler.go",
-			ArtifactType: "code",
+			ArtifactType: "source_code",
+			ContentType:  "text/x-go",
+			Content:      "package main\nfunc main() {}",
 		}},
 	}
 	if err := ValidateOutput("worker", "backend", output); err != nil {
@@ -135,7 +137,8 @@ func TestValidateOutput_Reviewer_Valid(t *testing.T) {
 		Summary: "评审完成",
 		Reviews: []ReviewAction{{
 			Verdict:  "approved",
-			Findings: []string{"good structure"},
+			Findings: []string{"good structure", "content is relevant"},
+			Recommendations: []string{"keep adding focused evidence"},
 		}},
 	}
 	if err := ValidateOutput("reviewer", "", output); err != nil {
@@ -149,7 +152,8 @@ func TestValidateOutput_Reviewer_InvalidVerdict(t *testing.T) {
 		Summary: "评审完成",
 		Reviews: []ReviewAction{{
 			Verdict:  "rejected",
-			Findings: []string{"bad"},
+			Findings: []string{"bad", "still bad"},
+			Recommendations: []string{"fix it"},
 		}},
 	}
 	err := ValidateOutput("reviewer", "", output)
@@ -196,5 +200,48 @@ func TestValidationError_Error(t *testing.T) {
 	msg := ve.Error()
 	if msg == "" {
 		t.Fatal("expected non-empty error message")
+	}
+}
+
+func TestValidateOutputForInput_AnalysisTaskRejectsTestReport(t *testing.T) {
+	input := &AgentTaskInput{
+		Project: &ProjectCtx{Name: "计算器"},
+		Task:    &TaskCtx{Title: "可行性评估", Description: "评估简易计算器的技术可行性与资源需求"},
+	}
+	output := &AgentTaskOutput{
+		Status:  OutputStatusNeedsReview,
+		Summary: "done",
+		Artifacts: []ArtifactAction{{
+			Name:         "report.md",
+			ArtifactType: "test_report",
+			ContentType:  "text/markdown",
+			Content:      "# 测试报告\n与可行性分析无关",
+		}},
+	}
+	if err := ValidateOutputForInput("worker", "general", input, output); err == nil {
+		t.Fatal("expected analysis task validation failure")
+	}
+}
+
+func TestValidateOutputForInput_ReviewerRejectsPlaceholderApproval(t *testing.T) {
+	input := &AgentTaskInput{
+		Task: &TaskCtx{Title: "可行性评估", Description: "评估项目可行性"},
+		Artifacts: []ArtifactCtx{{
+			Name:         "可行性评估-测试报告",
+			ArtifactType: "test_report",
+			Content:      "由 Mock QA Worker Agent 自动生成。",
+		}},
+	}
+	output := &AgentTaskOutput{
+		Status:  OutputStatusSuccess,
+		Summary: "评审完成",
+		Reviews: []ReviewAction{{
+			Verdict:         "approved",
+			Findings:        []string{"内容完整", "结构清晰"},
+			Recommendations: []string{"继续推进"},
+		}},
+	}
+	if err := ValidateOutputForInput("reviewer", "", input, output); err == nil {
+		t.Fatal("expected reviewer validation failure")
 	}
 }

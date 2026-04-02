@@ -28,6 +28,13 @@ func (r *ArtifactRepo) Create(ctx context.Context, a *model.Artifact) error {
 	).Scan(&a.ID, &a.CreatedAt, &a.UpdatedAt)
 }
 
+func (r *ArtifactRepo) Delete(ctx context.Context, id string) error {
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM artifact WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("artifact.Delete: %w", err)
+	}
+	return nil
+}
+
 func (r *ArtifactRepo) GetByID(ctx context.Context, id string) (*model.Artifact, error) {
 	const q = `
 		SELECT id, project_id, task_id, name, artifact_type, description, created_by, metadata,

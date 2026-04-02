@@ -140,6 +140,7 @@ func TestRoleCodeConstants(t *testing.T) {
 		{model.RoleCodePMSupervisor, "PM_SUPERVISOR"},
 		{model.RoleCodeDevelopmentSupervisor, "DEVELOPMENT_SUPERVISOR"},
 		{model.RoleCodeQASupervisor, "QA_SUPERVISOR"},
+		{model.RoleCodeGeneralWorker, "GENERAL_WORKER"},
 		{model.RoleCodeBackendDevWorker, "BACKEND_DEV_WORKER"},
 		{model.RoleCodeFrontendDevWorker, "FRONTEND_DEV_WORKER"},
 		{model.RoleCodeQAWorker, "QA_WORKER"},

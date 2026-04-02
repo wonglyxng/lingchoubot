@@ -25,6 +25,10 @@ func main() {
 	slog.SetDefault(logger)
 
 	cfg := config.Load()
+	if !cfg.LLM.Enabled {
+		logger.Error("LLM_ENABLED must be true; mock runtime has been removed from the workflow chain")
+		os.Exit(1)
+	}
 
 	db, err := repository.NewDB(cfg.Database.DSN(), logger)
 	if err != nil {
@@ -113,44 +117,38 @@ func main() {
 
 	// --- agent runtime & orchestrator ---
 	reg := runtime.NewRegistry()
+	defaultClient := runtime.NewLLMClient(runtime.LLMClientConfig{
+		BaseURL: cfg.LLM.BaseURL,
+		APIKey:  cfg.LLM.APIKey,
+		Model:   cfg.LLM.Model,
+	})
 
-	if cfg.LLM.Enabled {
-		defaultClient := runtime.NewLLMClient(runtime.LLMClientConfig{
-			BaseURL: cfg.LLM.BaseURL,
-			APIKey:  cfg.LLM.APIKey,
-			Model:   cfg.LLM.Model,
-		})
-
-		// 为有独立配置的角色创建专属 LLM 客户端
-		roleClients := make(map[string]*runtime.LLMClient)
-		for _, role := range []string{"pm", "supervisor", "worker", "reviewer"} {
-			baseURL, apiKey, model := cfg.LLM.ResolveForRole(role)
-			if baseURL != cfg.LLM.BaseURL || apiKey != cfg.LLM.APIKey || model != cfg.LLM.Model {
-				roleClients[role] = runtime.NewLLMClient(runtime.LLMClientConfig{
-					BaseURL: baseURL,
-					APIKey:  apiKey,
-					Model:   model,
-				})
-				logger.Info("role-specific LLM configured", "role", role, "model", model, "base_url", baseURL)
-			}
+	// 为有独立配置的角色创建专属 LLM 客户端
+	roleClients := make(map[string]*runtime.LLMClient)
+	for _, role := range []string{"pm", "supervisor", "worker", "reviewer"} {
+		baseURL, apiKey, model := cfg.LLM.ResolveForRole(role)
+		if baseURL != cfg.LLM.BaseURL || apiKey != cfg.LLM.APIKey || model != cfg.LLM.Model {
+			roleClients[role] = runtime.NewLLMClient(runtime.LLMClientConfig{
+				BaseURL: baseURL,
+				APIKey:  apiKey,
+				Model:   model,
+			})
+			logger.Info("role-specific LLM configured", "role", role, "model", model, "base_url", baseURL)
 		}
-
-		providerConfigs := make(map[string]runtime.LLMClientConfig, len(cfg.LLM.Providers))
-		for provider, providerCfg := range cfg.LLM.Providers {
-			providerConfigs[provider] = runtime.LLMClientConfig{
-				BaseURL: providerCfg.BaseURL,
-				APIKey:  providerCfg.APIKey,
-			}
-		}
-
-		runtime.RegisterLLMRunnersWithFallback(reg, defaultClient, roleClients, providerConfigs, func(providerKey string) (string, string, bool) {
-			return llmProviderSvc.GetProviderConfig(context.Background(), providerKey)
-		}, logger, cfg.LLM.FallbackEnabled)
-		logger.Info("LLM agent runners registered", "model", cfg.LLM.Model, "base_url", cfg.LLM.BaseURL, "fallback", cfg.LLM.FallbackEnabled)
-	} else {
-		reg.RegisterDefaults()
-		logger.Info("mock agent runners registered (set LLM_ENABLED=true to use LLM)")
 	}
+
+	providerConfigs := make(map[string]runtime.LLMClientConfig, len(cfg.LLM.Providers))
+	for provider, providerCfg := range cfg.LLM.Providers {
+		providerConfigs[provider] = runtime.LLMClientConfig{
+			BaseURL: providerCfg.BaseURL,
+			APIKey:  providerCfg.APIKey,
+		}
+	}
+
+	runtime.RegisterLLMRunnersWithProviderLookup(reg, defaultClient, roleClients, providerConfigs, func(providerKey string) (string, string, bool) {
+		return llmProviderSvc.GetProviderConfig(context.Background(), providerKey)
+	}, logger)
+	logger.Info("LLM agent runners registered", "model", cfg.LLM.Model, "base_url", cfg.LLM.BaseURL)
 
 	workflowRunRepo := repository.NewWorkflowRunRepo(db)
 	workflowStepRepo := repository.NewWorkflowStepRepo(db)

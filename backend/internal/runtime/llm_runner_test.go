@@ -118,7 +118,7 @@ func TestLLMRunner_Execute_InvalidJSON(t *testing.T) {
 func TestLLMRunner_Execute_EmptyStatus(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	// LLM returns JSON without status field
+	// LLM returns JSON without status field and without the required PM payload.
 	mockOutput := `{"summary":"done","phases":[]}`
 	runner := &LLMAgentRunner{
 		client: newTestLLMClient(mockOutput, nil),
@@ -138,9 +138,11 @@ func TestLLMRunner_Execute_EmptyStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Empty status should default to success
-	if output.Status != OutputStatusSuccess {
-		t.Errorf("expected default success status, got %s", output.Status)
+	if output.Status != OutputStatusFailed {
+		t.Errorf("expected strict validation failure, got %s", output.Status)
+	}
+	if !containsHelper(output.Error, "output validation") {
+		t.Errorf("expected validation error, got %s", output.Error)
 	}
 }
 
@@ -327,11 +329,8 @@ func TestLLMRunner_Fallback_OnLLMError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if output.Status == OutputStatusFailed {
-		t.Error("fallback should produce a non-failed output")
-	}
-	if !containsHelper(output.Summary, "降级") {
-		t.Errorf("fallback output should be annotated with [降级], got: %s", output.Summary)
+	if output.Status != OutputStatusFailed {
+		t.Errorf("expected failed status, got %s", output.Status)
 	}
 }
 
@@ -358,11 +357,8 @@ func TestLLMRunner_Fallback_OnParseError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if output.Status == OutputStatusFailed {
-		t.Error("fallback should produce non-failed output")
-	}
-	if !containsHelper(output.Summary, "降级") {
-		t.Errorf("fallback output should be annotated with [降级], got: %s", output.Summary)
+	if output.Status != OutputStatusFailed {
+		t.Errorf("expected failed status, got %s", output.Status)
 	}
 }
 
@@ -391,9 +387,8 @@ func TestLLMRunner_Fallback_OnValidationError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// With fallback, should get a valid mock PM output
-	if !containsHelper(output.Summary, "降级") {
-		t.Errorf("expected fallback annotation, got: %s", output.Summary)
+	if output.Status != OutputStatusFailed {
+		t.Errorf("expected failed status, got %s", output.Status)
 	}
 }
 
@@ -422,7 +417,7 @@ func TestRegisterLLMRunnersWithFallback(t *testing.T) {
 
 	RegisterLLMRunnersWithFallback(reg, defaultClient, nil, nil, nil, logger, true)
 
-	// Verify all roles have fallback set
+	// Wrapper should still register all roles, but fallback is no longer active.
 	for _, role := range []string{"pm", "supervisor", "worker", "reviewer"} {
 		runner, err := reg.Get(role)
 		if err != nil {
@@ -434,8 +429,8 @@ func TestRegisterLLMRunnersWithFallback(t *testing.T) {
 			t.Errorf("expected *LLMAgentRunner for %s", role)
 			continue
 		}
-		if llmR.fallback == nil {
-			t.Errorf("expected fallback for %s", role)
+		if llmR.fallback != nil {
+			t.Errorf("fallback should remain inactive for %s", role)
 		}
 	}
 }

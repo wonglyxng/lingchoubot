@@ -15,7 +15,7 @@ type LLMAgentRunner struct {
 	logger          *slog.Logger
 	providerConfigs map[string]LLMClientConfig
 	providerLookup  ProviderConfigLookup // dynamic lookup (e.g. DB-backed), tried before static map
-	fallback        AgentRunner          // optional fallback runner for degradation
+	fallback        AgentRunner          // deprecated: retained only for backward-compatible tests
 }
 
 // ProviderConfigLookup resolves a provider's connection config dynamically.
@@ -41,7 +41,7 @@ func NewLLMRunner(client *LLMClient, role, specialization string, logger *slog.L
 	}
 }
 
-// WithFallback sets a fallback runner for degradation when LLM fails.
+// WithFallback is deprecated and no longer affects execution.
 func (r *LLMAgentRunner) WithFallback(fb AgentRunner) *LLMAgentRunner {
 	r.fallback = fb
 	return r
@@ -65,7 +65,8 @@ func (r *LLMAgentRunner) WithProviderLookup(fn ProviderConfigLookup) *LLMAgentRu
 func (r *LLMAgentRunner) Role() string           { return r.role }
 func (r *LLMAgentRunner) Specialization() string { return r.spec }
 
-// Execute calls the LLM, validates output, and falls back to mock runner on failure.
+// Execute calls the LLM and validates output.
+// Any LLM failure is returned as OutputStatusFailed so the caller can stop the workflow.
 // Returns (*AgentTaskOutput, error). The output includes metadata via LastMeta().
 func (r *LLMAgentRunner) Execute(input *AgentTaskInput) (*AgentTaskOutput, error) {
 	pv := GetPromptVersion(r.role, r.spec)
@@ -85,14 +86,6 @@ func (r *LLMAgentRunner) Execute(input *AgentTaskInput) (*AgentTaskOutput, error
 	client, err := r.clientForInput(input)
 	if err != nil {
 		r.logger.Error("resolve llm client failed", "role", r.role, "error", err)
-		if r.fallback != nil {
-			r.logger.Warn("falling back to mock runner", "role", r.role)
-			output, fbErr := r.fallback.Execute(input)
-			if fbErr == nil && output != nil {
-				output.Summary = "[降级] " + output.Summary
-			}
-			return output, fbErr
-		}
 		return &AgentTaskOutput{
 			Status: OutputStatusFailed,
 			Error:  fmt.Sprintf("resolve llm client failed: %s", err.Error()),
@@ -108,17 +101,6 @@ func (r *LLMAgentRunner) Execute(input *AgentTaskInput) (*AgentTaskOutput, error
 	if err != nil {
 		r.logger.Error("LLM call failed", "role", r.role, "error", err,
 			"duration_ms", metaDurationMs(meta), "model", metaModel(meta))
-
-		// Fallback to mock runner if available
-		if r.fallback != nil {
-			r.logger.Warn("falling back to mock runner", "role", r.role)
-			output, fbErr := r.fallback.Execute(input)
-			if fbErr == nil && output != nil {
-				output.Summary = "[降级] " + output.Summary
-			}
-			return output, fbErr
-		}
-
 		return &AgentTaskOutput{
 			Status: OutputStatusFailed,
 			Error:  fmt.Sprintf("LLM call failed: %s", err.Error()),
@@ -134,15 +116,6 @@ func (r *LLMAgentRunner) Execute(input *AgentTaskInput) (*AgentTaskOutput, error
 		r.logger.Error("LLM output parse failed", "role", r.role,
 			"raw_prefix", truncateStr(raw, 500), "error", err)
 
-		if r.fallback != nil {
-			r.logger.Warn("falling back to mock runner after parse failure", "role", r.role)
-			out, fbErr := r.fallback.Execute(input)
-			if fbErr == nil && out != nil {
-				out.Summary = "[降级] " + out.Summary
-			}
-			return out, fbErr
-		}
-
 		return &AgentTaskOutput{
 			Status: OutputStatusFailed,
 			Error:  fmt.Sprintf("failed to parse LLM response as JSON: %s", err.Error()),
@@ -153,22 +126,13 @@ func (r *LLMAgentRunner) Execute(input *AgentTaskInput) (*AgentTaskOutput, error
 		output.Status = OutputStatusSuccess
 	}
 
-	// Validate output against role-specific schema
-	if valErr := ValidateOutput(r.role, r.spec, &output); valErr != nil {
+	if valErr := ValidateOutputForInput(r.role, r.spec, input, &output); valErr != nil {
 		r.logger.Warn("LLM output validation failed", "role", r.role, "error", valErr,
 			"prompt_version", pv.Version)
-
-		if r.fallback != nil {
-			r.logger.Warn("falling back to mock runner after validation failure", "role", r.role)
-			out, fbErr := r.fallback.Execute(input)
-			if fbErr == nil && out != nil {
-				out.Summary = "[降级] " + out.Summary
-			}
-			return out, fbErr
-		}
-
-		// Return original output with error annotation rather than blocking
-		output.Error = fmt.Sprintf("output validation: %s", valErr.Error())
+		return &AgentTaskOutput{
+			Status: OutputStatusFailed,
+			Error:  fmt.Sprintf("output validation: %s", valErr.Error()),
+		}, nil
 	}
 
 	r.logger.Info("LLM agent completed",
@@ -259,13 +223,12 @@ func (r *LLMAgentRunner) clientForInput(input *AgentTaskInput) (*LLMClient, erro
 // RegisterLLMRunners registers LLM-based runners for all roles into the given registry.
 // Each role can have its own LLM config (model/base_url/api_key); unconfigured fields
 // fall back to the global defaults provided by defaultClient.
-// When enableFallback is true, each LLM runner is configured with a mock fallback.
 func RegisterLLMRunners(reg *Registry, defaultClient *LLMClient, roleClients map[string]*LLMClient, providerConfigs map[string]LLMClientConfig, logger *slog.Logger) {
-	RegisterLLMRunnersWithFallback(reg, defaultClient, roleClients, providerConfigs, nil, logger, false)
+	RegisterLLMRunnersWithProviderLookup(reg, defaultClient, roleClients, providerConfigs, nil, logger)
 }
 
-// RegisterLLMRunnersWithFallback registers LLM runners with optional mock fallback.
-func RegisterLLMRunnersWithFallback(reg *Registry, defaultClient *LLMClient, roleClients map[string]*LLMClient, providerConfigs map[string]LLMClientConfig, providerLookup ProviderConfigLookup, logger *slog.Logger, enableFallback bool) {
+// RegisterLLMRunnersWithProviderLookup registers LLM runners with optional dynamic provider lookup.
+func RegisterLLMRunnersWithProviderLookup(reg *Registry, defaultClient *LLMClient, roleClients map[string]*LLMClient, providerConfigs map[string]LLMClientConfig, providerLookup ProviderConfigLookup, logger *slog.Logger) {
 	getClient := func(role string) *LLMClient {
 		if c, ok := roleClients[role]; ok {
 			return c
@@ -278,13 +241,6 @@ func RegisterLLMRunnersWithFallback(reg *Registry, defaultClient *LLMClient, rol
 	wrkRunner := NewLLMRunner(getClient("worker"), "worker", "general", logger).WithProviderConfigs(providerConfigs).WithProviderLookup(providerLookup)
 	revRunner := NewLLMRunner(getClient("reviewer"), "reviewer", "", logger).WithProviderConfigs(providerConfigs).WithProviderLookup(providerLookup)
 
-	if enableFallback {
-		pmRunner.WithFallback(&MockPMAgent{})
-		supRunner.WithFallback(&MockSupervisorAgent{})
-		wrkRunner.WithFallback(&MockWorkerAgent{})
-		revRunner.WithFallback(&MockReviewerAgent{})
-	}
-
 	reg.Register("pm", pmRunner)
 	reg.Register("supervisor", supRunner)
 	reg.Register("worker", wrkRunner)
@@ -295,12 +251,12 @@ func RegisterLLMRunnersWithFallback(reg *Registry, defaultClient *LLMClient, rol
 	bw := NewLLMRunner(wc, "worker", "backend", logger).WithProviderConfigs(providerConfigs).WithProviderLookup(providerLookup)
 	fw := NewLLMRunner(wc, "worker", "frontend", logger).WithProviderConfigs(providerConfigs).WithProviderLookup(providerLookup)
 	qw := NewLLMRunner(wc, "worker", "qa", logger).WithProviderConfigs(providerConfigs).WithProviderLookup(providerLookup)
-	if enableFallback {
-		bw.WithFallback(&MockBackendWorkerAgent{})
-		fw.WithFallback(&MockFrontendWorkerAgent{})
-		qw.WithFallback(&MockQAWorkerAgent{})
-	}
 	reg.RegisterSpecialized("worker", "backend", bw)
 	reg.RegisterSpecialized("worker", "frontend", fw)
 	reg.RegisterSpecialized("worker", "qa", qw)
+}
+
+// RegisterLLMRunnersWithFallback is deprecated. The enableFallback parameter is ignored.
+func RegisterLLMRunnersWithFallback(reg *Registry, defaultClient *LLMClient, roleClients map[string]*LLMClient, providerConfigs map[string]LLMClientConfig, providerLookup ProviderConfigLookup, logger *slog.Logger, enableFallback bool) {
+	RegisterLLMRunnersWithProviderLookup(reg, defaultClient, roleClients, providerConfigs, providerLookup, logger)
 }

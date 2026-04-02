@@ -32,20 +32,20 @@ func (r *Registry) RegisterSpecialized(role, specialization string, runner Agent
 }
 
 // GetForSpec looks up a runner by role + specialization.
-// Falls back to the base role runner if no specialized runner is found.
+// Specialized lookups are strict: if a specialized runner is required but not
+// registered, the lookup fails instead of falling back to the base role.
 func (r *Registry) GetForSpec(role, specialization string) (AgentRunner, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// Try specialized key first
 	if specialization != "" && specialization != "general" {
 		key := role + ":" + specialization
 		if runner, ok := r.runners[key]; ok {
 			return runner, nil
 		}
+		return nil, fmt.Errorf("no specialized agent runner registered for role %q (specialization %q)", role, specialization)
 	}
 
-	// Fall back to base role
 	if runner, ok := r.runners[role]; ok {
 		return runner, nil
 	}

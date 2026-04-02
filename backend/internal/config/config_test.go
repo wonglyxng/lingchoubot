@@ -125,7 +125,7 @@ func TestLoad_Defaults(t *testing.T) {
 		"DB_PASSWORD", "DB_NAME", "DB_SSLMODE", "API_KEY",
 		"MINIO_ENDPOINT", "MINIO_ACCESS_KEY", "MINIO_SECRET_KEY",
 		"MINIO_BUCKET", "MINIO_USE_SSL",
-		"LLM_ENABLED", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL",
+		"LLM_ENABLED", "LLM_FALLBACK_ENABLED", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL",
 		"TEMPORAL_ENABLED", "TEMPORAL_HOST_PORT", "TEMPORAL_NAMESPACE", "TEMPORAL_TASK_QUEUE",
 	}
 	saved := make(map[string]string)
@@ -158,8 +158,8 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.LLM.Enabled {
 		t.Error("LLM should be disabled by default")
 	}
-	if !cfg.LLM.FallbackEnabled {
-		t.Error("LLM fallback should be enabled by default")
+	if cfg.LLM.FallbackEnabled {
+		t.Error("LLM fallback should be disabled by default")
 	}
 	if cfg.LLM.Model != "gpt-4o-mini" {
 		t.Errorf("expected default LLM model gpt-4o-mini, got %s", cfg.LLM.Model)

@@ -45,6 +45,7 @@ const (
 	RoleCodePMSupervisor          RoleCode = "PM_SUPERVISOR"
 	RoleCodeDevelopmentSupervisor RoleCode = "DEVELOPMENT_SUPERVISOR"
 	RoleCodeQASupervisor          RoleCode = "QA_SUPERVISOR"
+	RoleCodeGeneralWorker         RoleCode = "GENERAL_WORKER"
 	RoleCodeBackendDevWorker      RoleCode = "BACKEND_DEV_WORKER"
 	RoleCodeFrontendDevWorker     RoleCode = "FRONTEND_DEV_WORKER"
 	RoleCodeQAWorker              RoleCode = "QA_WORKER"
