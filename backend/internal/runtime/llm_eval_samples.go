@@ -100,9 +100,9 @@ func workerBackendEvalSample() EvalSample {
 			Contract: &ContractCtx{
 				ID:                 "eval-contract-001",
 				Scope:              "实现 POST /api/v1/users/register 接口",
-				DoneDefinition:     "接口能接收用户名、邮箱、密码并返回 201；密码必须 bcrypt 加密后存储",
-				VerificationPlan:   "使用 curl 或 httptest 验证注册成功和重复邮箱报错",
-				AcceptanceCriteria: "参数校验完整；密码不以明文存储；邮箱重复返回 409",
+				DoneDefinition:     []string{"接口能接收用户名、邮箱、密码并返回 201", "密码必须 bcrypt 加密后存储"},
+				VerificationPlan:   []string{"使用 curl 验证注册成功", "使用 httptest 验证重复邮箱报错"},
+				AcceptanceCriteria: []string{"参数校验完整", "密码不以明文存储", "邮箱重复返回 409"},
 			},
 		},
 	}

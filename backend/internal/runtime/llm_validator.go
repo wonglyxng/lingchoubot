@@ -175,6 +175,52 @@ func validateReviewerOutput(o *AgentTaskOutput) []string {
 		} else if r.Verdict != "approved" && r.Verdict != "needs_revision" {
 			f = append(f, fmt.Sprintf("review[%d].verdict=%q (must be approved|needs_revision)", i, r.Verdict))
 		}
+		if strings.TrimSpace(r.TemplateKey) == "" {
+			f = append(f, fmt.Sprintf("review[%d].template_key is empty", i))
+		}
+		if r.PassThreshold <= 0 {
+			f = append(f, fmt.Sprintf("review[%d].pass_threshold must be positive", i))
+		}
+		if r.TotalScore < 0 || r.TotalScore > 100 {
+			f = append(f, fmt.Sprintf("review[%d].total_score=%d (must be between 0 and 100)", i, r.TotalScore))
+		}
+		if len(r.HardGateResults) == 0 {
+			f = append(f, fmt.Sprintf("review[%d].hard_gate_results is empty", i))
+		}
+		for j, gate := range r.HardGateResults {
+			if strings.TrimSpace(gate.Key) == "" {
+				f = append(f, fmt.Sprintf("review[%d].hard_gate_results[%d].key is empty", i, j))
+			}
+			if strings.TrimSpace(gate.Reason) == "" {
+				f = append(f, fmt.Sprintf("review[%d].hard_gate_results[%d].reason is empty", i, j))
+			}
+		}
+		if len(r.ScoreItems) == 0 {
+			f = append(f, fmt.Sprintf("review[%d].score_items is empty", i))
+		}
+		for j, item := range r.ScoreItems {
+			if strings.TrimSpace(item.Key) == "" {
+				f = append(f, fmt.Sprintf("review[%d].score_items[%d].key is empty", i, j))
+			}
+			if strings.TrimSpace(item.Name) == "" {
+				f = append(f, fmt.Sprintf("review[%d].score_items[%d].name is empty", i, j))
+			}
+			if item.Weight <= 0 {
+				f = append(f, fmt.Sprintf("review[%d].score_items[%d].weight must be positive", i, j))
+			}
+			if item.MaxScore <= 0 {
+				f = append(f, fmt.Sprintf("review[%d].score_items[%d].max_score must be positive", i, j))
+			}
+			if item.Score < 0 || item.Score > item.MaxScore {
+				f = append(f, fmt.Sprintf("review[%d].score_items[%d].score=%d exceeds range [0,%d]", i, j, item.Score, item.MaxScore))
+			}
+			if strings.TrimSpace(item.Reason) == "" {
+				f = append(f, fmt.Sprintf("review[%d].score_items[%d].reason is empty", i, j))
+			}
+		}
+		if r.Verdict == "needs_revision" && len(r.MustFixItems) == 0 {
+			f = append(f, fmt.Sprintf("review[%d].must_fix_items is empty for needs_revision verdict", i))
+		}
 		if len(r.Findings) < 2 {
 			f = append(f, fmt.Sprintf("review[%d].findings has %d items (min 2)", i, len(r.Findings)))
 		}
@@ -257,7 +303,14 @@ func validateReviewerOutputAgainstInput(input *AgentTaskInput, output *AgentTask
 	}
 
 	for i, review := range output.Reviews {
+		if input.Contract != nil && input.Contract.ReviewPolicy != nil {
+			failures = append(failures, validateReviewScorecardCoverage(i, input.Contract.ReviewPolicy, review)...)
+		}
+
 		if review.Verdict != "approved" {
+			if review.Verdict == "needs_revision" && len(review.MustFixItems) == 0 {
+				failures = append(failures, fmt.Sprintf("review[%d] needs_revision must include must_fix_items", i))
+			}
 			continue
 		}
 		if len(input.Artifacts) == 0 {
@@ -271,6 +324,59 @@ func validateReviewerOutputAgainstInput(input *AgentTaskInput, output *AgentTask
 		}
 	}
 
+	return failures
+}
+
+func validateReviewScorecardCoverage(index int, policy *ReviewPolicyCtx, review ReviewAction) []string {
+	if policy == nil {
+		return nil
+	}
+	var failures []string
+	if review.TemplateKey != policy.TemplateKey {
+		failures = append(failures, fmt.Sprintf("review[%d].template_key=%q does not match policy %q", index, review.TemplateKey, policy.TemplateKey))
+	}
+	if review.PassThreshold != policy.PassThreshold {
+		failures = append(failures, fmt.Sprintf("review[%d].pass_threshold=%d does not match policy %d", index, review.PassThreshold, policy.PassThreshold))
+	}
+
+	gateResults := map[string]HardGateResultAction{}
+	hasFailedGate := false
+	for _, gate := range review.HardGateResults {
+		gateResults[gate.Key] = gate
+		if !gate.Passed {
+			hasFailedGate = true
+		}
+	}
+	for _, expected := range policy.HardGates {
+		if _, ok := gateResults[expected.Key]; !ok {
+			failures = append(failures, fmt.Sprintf("review[%d] missing hard gate result for %q", index, expected.Key))
+		}
+	}
+
+	scoreResults := map[string]ScoreItemResultAction{}
+	for _, item := range review.ScoreItems {
+		scoreResults[item.Key] = item
+	}
+	for _, expected := range policy.ScoreItems {
+		got, ok := scoreResults[expected.Key]
+		if !ok {
+			failures = append(failures, fmt.Sprintf("review[%d] missing score item result for %q", index, expected.Key))
+			continue
+		}
+		if got.Weight != expected.Weight {
+			failures = append(failures, fmt.Sprintf("review[%d].score_items[%q].weight=%d does not match policy %d", index, expected.Key, got.Weight, expected.Weight))
+		}
+	}
+
+	if review.Verdict == "approved" && hasFailedGate {
+		failures = append(failures, fmt.Sprintf("review[%d] approved despite failed hard gate", index))
+	}
+	if review.Verdict == "approved" && review.TotalScore < policy.PassThreshold {
+		failures = append(failures, fmt.Sprintf("review[%d] approved with total_score=%d below threshold=%d", index, review.TotalScore, policy.PassThreshold))
+	}
+	if review.Verdict == "needs_revision" && len(review.MustFixItems) == 0 {
+		failures = append(failures, fmt.Sprintf("review[%d] needs_revision without must_fix_items", index))
+	}
 	return failures
 }
 

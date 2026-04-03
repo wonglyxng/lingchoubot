@@ -58,11 +58,12 @@ type TaskCtx struct {
 }
 
 type ContractCtx struct {
-	ID                 string `json:"id"`
-	Scope              string `json:"scope"`
-	DoneDefinition     string `json:"done_definition"`
-	VerificationPlan   string `json:"verification_plan"`
-	AcceptanceCriteria string `json:"acceptance_criteria"`
+	ID                 string           `json:"id"`
+	Scope              string           `json:"scope"`
+	DoneDefinition     []string         `json:"done_definition,omitempty"`
+	VerificationPlan   []string         `json:"verification_plan,omitempty"`
+	AcceptanceCriteria []string         `json:"acceptance_criteria,omitempty"`
+	ReviewPolicy       *ReviewPolicyCtx `json:"review_policy,omitempty"`
 }
 
 type ArtifactCtx struct {
@@ -121,6 +122,9 @@ type ContractAction struct {
 	DoneDefinition     []string `json:"done_definition"`
 	VerificationSteps  []string `json:"verification_steps"`
 	AcceptanceCriteria []string `json:"acceptance_criteria"`
+	TaskCategory       string   `json:"task_category,omitempty"`
+	ReviewTemplateKey  string   `json:"review_template_key,omitempty"`
+	ReviewPolicy       any      `json:"review_policy,omitempty"`
 }
 
 type AssignmentAction struct {
@@ -150,13 +154,57 @@ type HandoffAction struct {
 }
 
 type ReviewAction struct {
-	Verdict         string   `json:"verdict"`
-	Summary         string   `json:"summary"`
-	Findings        []string `json:"findings"`
-	Recommendations []string `json:"recommendations"`
+	Verdict         string                  `json:"verdict"`
+	Summary         string                  `json:"summary"`
+	Findings        []string                `json:"findings"`
+	Recommendations []string                `json:"recommendations"`
+	TemplateKey     string                  `json:"template_key,omitempty"`
+	PassThreshold   int                     `json:"pass_threshold,omitempty"`
+	TotalScore      int                     `json:"total_score,omitempty"`
+	HardGateResults []HardGateResultAction  `json:"hard_gate_results,omitempty"`
+	ScoreItems      []ScoreItemResultAction `json:"score_items,omitempty"`
+	MustFixItems    []string                `json:"must_fix_items,omitempty"`
+	Suggestions     []string                `json:"suggestions,omitempty"`
 }
 
 type TransitionAction struct {
 	TaskTitle string `json:"task_title"`
 	NewStatus string `json:"new_status"`
+}
+
+type ReviewPolicyCtx struct {
+	TemplateKey   string         `json:"template_key"`
+	TaskCategory  string         `json:"task_category"`
+	PassThreshold int            `json:"pass_threshold"`
+	HardGates     []HardGateCtx  `json:"hard_gates,omitempty"`
+	ScoreItems    []ScoreItemCtx `json:"score_items,omitempty"`
+	ReworkCount   int            `json:"rework_count,omitempty"`
+}
+
+type HardGateCtx struct {
+	Key         string `json:"key"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+type ScoreItemCtx struct {
+	Key         string `json:"key"`
+	Name        string `json:"name"`
+	Weight      int    `json:"weight"`
+	Description string `json:"description,omitempty"`
+}
+
+type HardGateResultAction struct {
+	Key    string `json:"key"`
+	Passed bool   `json:"passed"`
+	Reason string `json:"reason"`
+}
+
+type ScoreItemResultAction struct {
+	Key      string `json:"key"`
+	Name     string `json:"name"`
+	Weight   int    `json:"weight"`
+	Score    int    `json:"score"`
+	MaxScore int    `json:"max_score"`
+	Reason   string `json:"reason"`
 }

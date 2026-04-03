@@ -137,6 +137,11 @@ func TestValidateOutput_Reviewer_Valid(t *testing.T) {
 		Summary: "评审完成",
 		Reviews: []ReviewAction{{
 			Verdict:         "approved",
+			TemplateKey:     "backend_v1",
+			PassThreshold:   80,
+			TotalScore:      85,
+			HardGateResults: []HardGateResultAction{{Key: "goal_match", Passed: true, Reason: "工件与任务目标一致"}},
+			ScoreItems:      []ScoreItemResultAction{{Key: "functional_correctness", Name: "功能正确性", Weight: 35, Score: 35, MaxScore: 35, Reason: "功能实现完整"}},
 			Findings:        []string{"good structure", "content is relevant"},
 			Recommendations: []string{"keep adding focused evidence"},
 		}},
@@ -302,11 +307,97 @@ func TestValidateOutputForInput_ReviewerRejectsPlaceholderApproval(t *testing.T)
 		Summary: "评审完成",
 		Reviews: []ReviewAction{{
 			Verdict:         "approved",
+			TemplateKey:     "architecture_v1",
+			PassThreshold:   80,
+			TotalScore:      82,
+			HardGateResults: []HardGateResultAction{{Key: "goal_match", Passed: true, Reason: "目标一致"}},
+			ScoreItems:      []ScoreItemResultAction{{Key: "technical_feasibility", Name: "技术可行性", Weight: 25, Score: 20, MaxScore: 25, Reason: "基本可行"}},
 			Findings:        []string{"内容完整", "结构清晰"},
 			Recommendations: []string{"继续推进"},
 		}},
 	}
 	if err := ValidateOutputForInput("reviewer", "", input, output); err == nil {
 		t.Fatal("expected reviewer validation failure")
+	}
+}
+
+func TestValidateOutputForInput_ReviewerRequiresFullScorecardCoverage(t *testing.T) {
+	input := &AgentTaskInput{
+		Task: &TaskCtx{Title: "需求梳理与PRD编写", Description: "输出完整 PRD"},
+		Contract: &ContractCtx{
+			Scope:              "输出 PRD",
+			AcceptanceCriteria: []string{"验收标准明确"},
+			ReviewPolicy: &ReviewPolicyCtx{
+				TemplateKey:   "prd_v1",
+				TaskCategory:  "prd",
+				PassThreshold: 80,
+				HardGates: []HardGateCtx{
+					{Key: "goal_match", Name: "工件与任务目标一致"},
+					{Key: "acceptance_testable", Name: "验收标准可验证"},
+				},
+				ScoreItems: []ScoreItemCtx{
+					{Key: "completeness", Name: "完整性", Weight: 25},
+					{Key: "executability", Name: "可执行性", Weight: 20},
+				},
+			},
+		},
+	}
+	output := &AgentTaskOutput{
+		Status:  OutputStatusSuccess,
+		Summary: "评审完成",
+		Reviews: []ReviewAction{{
+			Verdict:       "needs_revision",
+			TemplateKey:   "prd_v1",
+			PassThreshold: 80,
+			TotalScore:    74,
+			HardGateResults: []HardGateResultAction{
+				{Key: "goal_match", Passed: true, Reason: "内容与任务一致"},
+			},
+			ScoreItems: []ScoreItemResultAction{
+				{Key: "completeness", Name: "完整性", Weight: 25, Score: 20, MaxScore: 25, Reason: "主体基本完整"},
+			},
+			Findings:        []string{"验收标准不够细", "缺少边界场景"},
+			Recommendations: []string{"补充更多细节"},
+			MustFixItems:    []string{"补充可验证的验收标准"},
+		}},
+	}
+	if err := ValidateOutputForInput("reviewer", "", input, output); err == nil {
+		t.Fatal("expected scorecard coverage validation failure")
+	}
+}
+
+func TestValidateOutputForInput_ReviewerNeedsRevisionRequiresMustFixItems(t *testing.T) {
+	input := &AgentTaskInput{
+		Task: &TaskCtx{Title: "后端接口实现", Description: "完成 API"},
+		Contract: &ContractCtx{
+			ReviewPolicy: &ReviewPolicyCtx{
+				TemplateKey:   "backend_v1",
+				TaskCategory:  "backend",
+				PassThreshold: 80,
+				HardGates:     []HardGateCtx{{Key: "goal_match", Name: "工件与任务目标一致"}},
+				ScoreItems:    []ScoreItemCtx{{Key: "functional_correctness", Name: "功能正确性", Weight: 100}},
+			},
+		},
+	}
+	output := &AgentTaskOutput{
+		Status:  OutputStatusSuccess,
+		Summary: "评审完成",
+		Reviews: []ReviewAction{{
+			Verdict:       "needs_revision",
+			TemplateKey:   "backend_v1",
+			PassThreshold: 80,
+			TotalScore:    70,
+			HardGateResults: []HardGateResultAction{
+				{Key: "goal_match", Passed: true, Reason: "整体一致"},
+			},
+			ScoreItems: []ScoreItemResultAction{
+				{Key: "functional_correctness", Name: "功能正确性", Weight: 100, Score: 70, MaxScore: 100, Reason: "边界条件不足"},
+			},
+			Findings:        []string{"边界处理不足", "错误返回不完整"},
+			Recommendations: []string{"补充边界条件"},
+		}},
+	}
+	if err := ValidateOutputForInput("reviewer", "", input, output); err == nil {
+		t.Fatal("expected must_fix_items validation failure")
 	}
 }

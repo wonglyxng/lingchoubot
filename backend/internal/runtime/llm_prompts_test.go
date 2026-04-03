@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -97,6 +98,23 @@ func TestEvalSamples_Validation(t *testing.T) {
 	}
 }
 
+func TestReviewerPrompt_ContainsScorecardSchema(t *testing.T) {
+	prompt := buildSystemPrompt("reviewer", "")
+	required := []string{
+		`"template_key"`,
+		`"pass_threshold"`,
+		`"total_score"`,
+		`"hard_gate_results"`,
+		`"score_items"`,
+		`"must_fix_items"`,
+	}
+	for _, item := range required {
+		if !containsPromptText(prompt, item) {
+			t.Fatalf("reviewer prompt missing %s", item)
+		}
+	}
+}
+
 func validEvalOutputForSample(sample EvalSample) *AgentTaskOutput {
 	switch sample.Role {
 	case "pm":
@@ -141,9 +159,27 @@ func validEvalOutputForSample(sample EvalSample) *AgentTaskOutput {
 		return &AgentTaskOutput{
 			Status:  OutputStatusSuccess,
 			Summary: "评审完成",
-			Reviews: []ReviewAction{{Verdict: "approved", Summary: "实现合理", Findings: []string{"接口边界清晰", "工件与任务一致"}, Recommendations: []string{"补充更多测试覆盖"}}},
+			Reviews: []ReviewAction{{
+				Verdict:       "approved",
+				Summary:       "实现合理",
+				TemplateKey:   "backend_v1",
+				PassThreshold: 80,
+				TotalScore:    85,
+				HardGateResults: []HardGateResultAction{
+					{Key: "goal_match", Passed: true, Reason: "工件与任务目标一致"},
+				},
+				ScoreItems: []ScoreItemResultAction{
+					{Key: "functional_correctness", Name: "功能正确性", Weight: 35, Score: 35, MaxScore: 35, Reason: "功能实现完整"},
+				},
+				Findings:        []string{"接口边界清晰", "工件与任务一致"},
+				Recommendations: []string{"补充更多测试覆盖"},
+			}},
 		}
 	default:
 		return &AgentTaskOutput{Status: OutputStatusSuccess, Summary: "ok"}
 	}
+}
+
+func containsPromptText(prompt, target string) bool {
+	return len(prompt) > 0 && len(target) > 0 && strings.Contains(prompt, target)
 }
