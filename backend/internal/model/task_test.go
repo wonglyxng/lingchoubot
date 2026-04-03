@@ -46,6 +46,7 @@ func TestTaskStatusCanTransitionTo(t *testing.T) {
 		{TaskStatusPendingApproval, TaskStatusPending, false},
 
 		// revision_required
+		{TaskStatusRevisionRequired, TaskStatusAssigned, true},
 		{TaskStatusRevisionRequired, TaskStatusInProgress, true},
 		{TaskStatusRevisionRequired, TaskStatusCancelled, true},
 		{TaskStatusRevisionRequired, TaskStatusCompleted, false},

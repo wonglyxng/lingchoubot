@@ -32,7 +32,7 @@ var validTaskTransitions = map[TaskStatus][]TaskStatus{
 	TaskStatusInProgress:       {TaskStatusInReview, TaskStatusCompleted, TaskStatusFailed, TaskStatusBlocked, TaskStatusCancelled},
 	TaskStatusInReview:         {TaskStatusPendingApproval, TaskStatusRevisionRequired, TaskStatusFailed},
 	TaskStatusPendingApproval:  {TaskStatusCompleted, TaskStatusRevisionRequired, TaskStatusFailed},
-	TaskStatusRevisionRequired: {TaskStatusInProgress, TaskStatusCancelled},
+	TaskStatusRevisionRequired: {TaskStatusAssigned, TaskStatusInProgress, TaskStatusCancelled},
 	TaskStatusBlocked:          {TaskStatusInProgress, TaskStatusCancelled},
 	TaskStatusFailed:           {TaskStatusPending, TaskStatusCancelled},
 }

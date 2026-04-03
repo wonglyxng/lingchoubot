@@ -9,6 +9,7 @@ import (
 
 	"github.com/lingchou/lingchoubot/backend/internal/model"
 	"github.com/lingchou/lingchoubot/backend/internal/repository"
+	"github.com/lingchou/lingchoubot/backend/internal/reviewpolicy"
 	"github.com/lingchou/lingchoubot/backend/internal/runtime"
 	"github.com/lingchou/lingchoubot/backend/internal/service"
 )
@@ -441,20 +442,15 @@ func (e *Engine) runTaskChain(ctx context.Context, rc *runCtx, proj *model.Proje
 	switch task.Status {
 	case model.TaskStatusCompleted, model.TaskStatusPendingApproval:
 		return nil
-	case model.TaskStatusPending:
+	case model.TaskStatusPending, model.TaskStatusRevisionRequired:
 		if err := e.runSupervisor(ctx, rc, proj, phase, task); err != nil {
 			return err
 		}
-		fresh, err := e.services.Task.GetByID(ctx, task.ID)
-		if err != nil {
-			return fmt.Errorf("reload task after supervisor: %w", err)
+		if err := e.reloadTask(ctx, task, "supervisor"); err != nil {
+			return err
 		}
-		if fresh == nil {
-			return fmt.Errorf("task %s disappeared after supervisor", task.ID)
-		}
-		*task = *fresh
 		return e.runWorkerReviewerLoop(ctx, rc, proj, phase, task, false)
-	case model.TaskStatusAssigned, model.TaskStatusInProgress, model.TaskStatusRevisionRequired:
+	case model.TaskStatusAssigned, model.TaskStatusInProgress:
 		return e.runWorkerReviewerLoop(ctx, rc, proj, phase, task, false)
 	case model.TaskStatusInReview:
 		return e.runWorkerReviewerLoop(ctx, rc, proj, phase, task, true)
@@ -475,33 +471,46 @@ func (e *Engine) runWorkerReviewerLoop(ctx context.Context, rc *runCtx, proj *mo
 			return err
 		}
 
-		fresh, err := e.services.Task.GetByID(ctx, task.ID)
-		if err != nil {
-			return fmt.Errorf("reload task after review: %w", err)
+		if err := e.reloadTask(ctx, task, "review"); err != nil {
+			return err
 		}
-		if fresh == nil {
-			return fmt.Errorf("task %s disappeared after review", task.ID)
-		}
-		*task = *fresh
 
 		if task.Status != model.TaskStatusRevisionRequired {
 			return nil
 		}
 
+		reworkBrief := extractCurrentReworkBrief(task.Metadata)
 		e.logger.Info("rework triggered", "task", task.Title, "attempt", attempt+1)
 		e.services.Audit.LogEvent(ctx, "system", "", "task.rework",
 			fmt.Sprintf("任务「%s」评审打回，第 %d 次返工，回到责任主管", task.Title, attempt+1),
-			"task", task.ID, nil, map[string]string{
-				"attempt":             fmt.Sprintf("%d", attempt+1),
+			"task", task.ID, nil, map[string]any{
+				"attempt":             attempt + 1,
 				"owner_supervisor_id": stringOrEmpty(task.OwnerSupervisorID),
+				"rework_brief":        reworkBrief,
 			})
 
-		_ = e.services.Task.TransitionStatus(ctx, task.ID, model.TaskStatusInProgress)
+		if attempt == maxReworkAttempts {
+			e.logger.Warn("max rework attempts reached", "task", task.Title)
+			return newManualInterventionError(
+				"supervisor",
+				phase.ID,
+				phase.Name,
+				task.ID,
+				task.Title,
+				fmt.Sprintf("任务「%s」超过最大返工次数（%d），需要人工介入", task.Title, maxReworkAttempts),
+			)
+		}
+
+		if err := e.runSupervisor(ctx, rc, proj, phase, task); err != nil {
+			return err
+		}
+		if err := e.reloadTask(ctx, task, "supervisor"); err != nil {
+			return err
+		}
 		startWithReviewer = false
 	}
 
-	e.logger.Warn("max rework attempts reached", "task", task.Title)
-	return fmt.Errorf("task %q exceeded max rework attempts (%d)", task.Title, maxReworkAttempts)
+	return nil
 }
 
 func stringOrEmpty(s *string) string {
@@ -572,7 +581,7 @@ func (e *Engine) runSupervisor(ctx context.Context, rc *runCtx, proj *model.Proj
 		return newManualInterventionError("supervisor", phase.ID, phase.Name, task.ID, task.Title, output.Error)
 	}
 
-	if err := e.processContractActions(ctx, task.ID, output.Contracts); err != nil {
+	if err := e.processContractActions(ctx, task, output.Contracts); err != nil {
 		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
 	}
@@ -626,13 +635,10 @@ func (e *Engine) runWorker(ctx context.Context, rc *runCtx, proj *model.Project,
 		return err
 	}
 
-	var contractCtx *runtime.ContractCtx
-	contract, _ := e.services.Contract.GetLatestByTaskID(ctx, task.ID)
-	if contract != nil {
-		contractCtx = &runtime.ContractCtx{
-			ID:    contract.ID,
-			Scope: contract.Scope,
-		}
+	contractCtx, err := e.loadContractContext(ctx, task)
+	if err != nil {
+		_ = e.workflow.FailStep(ctx, step, err.Error())
+		return err
 	}
 
 	input := &runtime.AgentTaskInput{
@@ -707,6 +713,11 @@ func (e *Engine) runReviewer(ctx context.Context, rc *runCtx, proj *model.Projec
 		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
 	}
+	contractCtx, err := e.loadContractContext(ctx, task)
+	if err != nil {
+		_ = e.workflow.FailStep(ctx, step, err.Error())
+		return err
+	}
 
 	input := &runtime.AgentTaskInput{
 		RunID:       rc.run.ID,
@@ -717,6 +728,7 @@ func (e *Engine) runReviewer(ctx context.Context, rc *runCtx, proj *model.Projec
 		Project:     &runtime.ProjectCtx{ID: proj.ID, Name: proj.Name, Description: proj.Description},
 		Phase:       &runtime.PhaseCtx{ID: phase.ID, ProjectID: proj.ID, Name: phase.Name, Description: phase.Description, SortOrder: phase.SortOrder},
 		Task:        &runtime.TaskCtx{ID: task.ID, ProjectID: proj.ID, PhaseID: phase.ID, Title: task.Title, Description: task.Description, Priority: task.Priority},
+		Contract:    contractCtx,
 		Artifacts:   artifactCtxs,
 	}
 
@@ -730,7 +742,7 @@ func (e *Engine) runReviewer(ctx context.Context, rc *runCtx, proj *model.Projec
 		return newManualInterventionError("reviewer", phase.ID, phase.Name, task.ID, task.Title, output.Error)
 	}
 
-	if err := e.processReviewActions(ctx, rc.run.ID, task.ID, agent.ID, artifactCtxs, output.Reviews); err != nil {
+	if err := e.processReviewActions(ctx, rc.run.ID, task.ID, agent.ID, artifactCtxs, contractCtx, output.Reviews); err != nil {
 		_ = e.workflow.FailStep(ctx, step, err.Error())
 		return err
 	}
@@ -783,23 +795,29 @@ func (e *Engine) processTaskActions(ctx context.Context, projectID string, phase
 	return nil
 }
 
-func (e *Engine) processContractActions(ctx context.Context, taskID string, actions []runtime.ContractAction) error {
+func (e *Engine) processContractActions(ctx context.Context, task *model.Task, actions []runtime.ContractAction) error {
 	for _, a := range actions {
 		nonGoals, _ := json.Marshal(a.NonGoals)
 		doneDef, _ := json.Marshal(a.DoneDefinition)
 		verSteps, _ := json.Marshal(a.VerificationSteps)
 		accCrit, _ := json.Marshal(a.AcceptanceCriteria)
+		metadata, err := buildContractMetadata(task, a)
+		if err != nil {
+			return fmt.Errorf("build contract metadata for task %s: %w", task.ID, err)
+		}
+		metadataBytes, _ := json.Marshal(metadata)
 
 		contract := &model.TaskContract{
-			TaskID:             taskID,
+			TaskID:             task.ID,
 			Scope:              a.Scope,
 			NonGoals:           model.JSON(nonGoals),
 			DoneDefinition:     model.JSON(doneDef),
 			VerificationPlan:   model.JSON(verSteps),
 			AcceptanceCriteria: model.JSON(accCrit),
+			Metadata:           model.JSON(metadataBytes),
 		}
 		if err := e.services.Contract.Create(ctx, contract); err != nil {
-			return fmt.Errorf("create contract for task %s: %w", taskID, err)
+			return fmt.Errorf("create contract for task %s: %w", task.ID, err)
 		}
 	}
 	return nil
@@ -920,14 +938,14 @@ func (e *Engine) processHandoffActions(ctx context.Context, taskID, agentID stri
 	return nil
 }
 
-func (e *Engine) processReviewActions(ctx context.Context, runID, taskID, reviewerID string, artifactCtxs []runtime.ArtifactCtx, actions []runtime.ReviewAction) error {
+func (e *Engine) processReviewActions(ctx context.Context, runID, taskID, reviewerID string, artifactCtxs []runtime.ArtifactCtx, contractCtx *runtime.ContractCtx, actions []runtime.ReviewAction) error {
 	if len(actions) != 1 {
 		return fmt.Errorf("reviewer must output exactly 1 review action, got %d", len(actions))
 	}
 	for _, a := range actions {
 		findings, _ := json.Marshal(a.Findings)
 		recommendations, _ := json.Marshal(a.Recommendations)
-		metadata, artifactVersionID := buildReviewMetadata(artifactCtxs)
+		metadata, artifactVersionID := buildReviewMetadata(artifactCtxs, contractCtx, a)
 		metadataBytes, _ := json.Marshal(metadata)
 
 		runIDCopy := runID
@@ -978,7 +996,54 @@ func (e *Engine) loadTaskArtifactContexts(ctx context.Context, taskID string) ([
 	return contexts, nil
 }
 
-func buildReviewMetadata(artifactCtxs []runtime.ArtifactCtx) (map[string]any, *string) {
+func (e *Engine) loadContractContext(ctx context.Context, task *model.Task) (*runtime.ContractCtx, error) {
+	contract, err := e.services.Contract.GetLatestByTaskID(ctx, task.ID)
+	if err != nil {
+		return nil, fmt.Errorf("load latest contract for task %s: %w", task.ID, err)
+	}
+	if contract == nil {
+		return nil, nil
+	}
+
+	doneDefinition, err := jsonArrayToStringsSafe(contract.DoneDefinition)
+	if err != nil {
+		return nil, fmt.Errorf("parse contract done_definition: %w", err)
+	}
+	verificationPlan, err := jsonArrayToStringsSafe(contract.VerificationPlan)
+	if err != nil {
+		return nil, fmt.Errorf("parse contract verification_plan: %w", err)
+	}
+	acceptanceCriteria, err := jsonArrayToStringsSafe(contract.AcceptanceCriteria)
+	if err != nil {
+		return nil, fmt.Errorf("parse contract acceptance_criteria: %w", err)
+	}
+
+	reviewPolicy, err := loadContractReviewPolicy(contract.Metadata)
+	if err != nil {
+		return nil, fmt.Errorf("parse contract review_policy: %w", err)
+	}
+	if reviewPolicy == nil {
+		defaultPolicy, resolveErr := reviewpolicy.ResolvePolicy(inferTaskCategory(task), nil)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("resolve fallback review policy: %w", resolveErr)
+		}
+		reviewPolicy = defaultPolicy
+	}
+
+	contractCtx := &runtime.ContractCtx{
+		ID:                 contract.ID,
+		Scope:              contract.Scope,
+		DoneDefinition:     doneDefinition,
+		VerificationPlan:   verificationPlan,
+		AcceptanceCriteria: acceptanceCriteria,
+	}
+	if reviewPolicy != nil {
+		contractCtx.ReviewPolicy = resolvedPolicyToRuntime(reviewPolicy)
+	}
+	return contractCtx, nil
+}
+
+func buildReviewMetadata(artifactCtxs []runtime.ArtifactCtx, contractCtx *runtime.ContractCtx, action runtime.ReviewAction) (map[string]any, *string) {
 	artifacts := make([]map[string]any, 0, len(artifactCtxs))
 	var artifactVersionID *string
 	for _, artifact := range artifactCtxs {
@@ -1000,10 +1065,183 @@ func buildReviewMetadata(artifactCtxs []runtime.ArtifactCtx) (map[string]any, *s
 		}
 		artifacts = append(artifacts, entry)
 	}
-	return map[string]any{
+	metadata := map[string]any{
 		"artifact_count": len(artifacts),
 		"artifacts":      artifacts,
-	}, artifactVersionID
+	}
+	if contractCtx != nil && contractCtx.ReviewPolicy != nil {
+		metadata["task_category"] = contractCtx.ReviewPolicy.TaskCategory
+		if action.TemplateKey == "" {
+			metadata["template_key"] = contractCtx.ReviewPolicy.TemplateKey
+		}
+		if action.PassThreshold == 0 {
+			metadata["pass_threshold"] = contractCtx.ReviewPolicy.PassThreshold
+		}
+	}
+	if action.TemplateKey != "" {
+		metadata["template_key"] = action.TemplateKey
+	}
+	if action.PassThreshold > 0 {
+		metadata["pass_threshold"] = action.PassThreshold
+	}
+	metadata["total_score"] = action.TotalScore
+	if len(action.HardGateResults) > 0 {
+		metadata["hard_gate_results"] = action.HardGateResults
+	}
+	if len(action.ScoreItems) > 0 {
+		metadata["score_items"] = action.ScoreItems
+	}
+	if len(action.MustFixItems) > 0 {
+		metadata["must_fix_items"] = action.MustFixItems
+	}
+	if len(action.Suggestions) > 0 {
+		metadata["suggestions"] = action.Suggestions
+	}
+	return metadata, artifactVersionID
+}
+
+func buildContractMetadata(task *model.Task, action runtime.ContractAction) (map[string]any, error) {
+	taskCategory := action.TaskCategory
+	if taskCategory == "" {
+		taskCategory = inferTaskCategory(task)
+	}
+	override, err := normalizePolicyOverride(action.ReviewPolicy)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := reviewpolicy.ResolvePolicy(taskCategory, override)
+	if err != nil {
+		return nil, err
+	}
+	if action.ReviewTemplateKey != "" && action.ReviewTemplateKey != resolved.TemplateKey {
+		return nil, fmt.Errorf("review_template_key %q does not match resolved template %q", action.ReviewTemplateKey, resolved.TemplateKey)
+	}
+	metadata := map[string]any{
+		"task_category":       resolved.TaskCategory,
+		"review_template_key": resolved.TemplateKey,
+		"review_policy":       resolved,
+	}
+	if len(override) > 0 {
+		metadata["review_policy_override"] = override
+	}
+	return metadata, nil
+}
+
+func normalizePolicyOverride(raw any) (map[string]any, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	if override, ok := raw.(map[string]any); ok {
+		return override, nil
+	}
+	bytes, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("marshal review policy override: %w", err)
+	}
+	if string(bytes) == "null" {
+		return nil, nil
+	}
+	override := map[string]any{}
+	if err := json.Unmarshal(bytes, &override); err != nil {
+		return nil, fmt.Errorf("unmarshal review policy override: %w", err)
+	}
+	if len(override) == 0 {
+		return nil, nil
+	}
+	return override, nil
+}
+
+func loadContractReviewPolicy(raw model.JSON) (*reviewpolicy.ResolvedPolicy, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var metadata struct {
+		ReviewPolicy *reviewpolicy.ResolvedPolicy `json:"review_policy"`
+	}
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return nil, err
+	}
+	return metadata.ReviewPolicy, nil
+}
+
+func resolvedPolicyToRuntime(policy *reviewpolicy.ResolvedPolicy) *runtime.ReviewPolicyCtx {
+	if policy == nil {
+		return nil
+	}
+	hardGates := make([]runtime.HardGateCtx, 0, len(policy.HardGates))
+	for _, gate := range policy.HardGates {
+		hardGates = append(hardGates, runtime.HardGateCtx{
+			Key:         gate.Key,
+			Name:        gate.Name,
+			Description: gate.Description,
+		})
+	}
+	scoreItems := make([]runtime.ScoreItemCtx, 0, len(policy.ScoreItems))
+	for _, item := range policy.ScoreItems {
+		scoreItems = append(scoreItems, runtime.ScoreItemCtx{
+			Key:         item.Key,
+			Name:        item.Name,
+			Weight:      item.Weight,
+			Description: item.Description,
+		})
+	}
+	return &runtime.ReviewPolicyCtx{
+		TemplateKey:   policy.TemplateKey,
+		TaskCategory:  policy.TaskCategory,
+		PassThreshold: policy.PassThreshold,
+		HardGates:     hardGates,
+		ScoreItems:    scoreItems,
+	}
+}
+
+func jsonArrayToStringsSafe(raw model.JSON) ([]string, error) {
+	if len(raw) == 0 {
+		return []string{}, nil
+	}
+	var items []string
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func inferTaskCategory(task *model.Task) string {
+	if task == nil {
+		return "architecture"
+	}
+	combined := task.Title + " " + task.Description
+
+	if containsCI(combined, "发布") || containsCI(combined, "部署") || containsCI(combined, "上线") || containsCI(combined, "release") {
+		return "release"
+	}
+	if containsCI(combined, "测试") || containsCI(combined, "验收") || containsCI(combined, "QA") || containsCI(combined, "quality") {
+		return "qa"
+	}
+	if containsCI(combined, "前端") || containsCI(combined, "页面") || containsCI(combined, "UI") || containsCI(combined, "交互") {
+		return "frontend"
+	}
+	if containsCI(combined, "PRD") || containsCI(combined, "需求") || containsCI(combined, "规格") || containsCI(combined, "文档") {
+		return "prd"
+	}
+	if containsCI(combined, "架构") || containsCI(combined, "方案") || containsCI(combined, "设计") || containsCI(combined, "可行性") || containsCI(combined, "评估") || containsCI(combined, "数据库") || containsCI(combined, "接口") || containsCI(combined, "API") {
+		return "architecture"
+	}
+	if containsCI(combined, "后端") || containsCI(combined, "服务端") || containsCI(combined, "开发") || containsCI(combined, "实现") || containsCI(combined, "handler") || containsCI(combined, "repository") {
+		return "backend"
+	}
+
+	switch inferSpecialization(task) {
+	case model.AgentSpecFrontend:
+		return "frontend"
+	case model.AgentSpecQA:
+		return "qa"
+	case model.AgentSpecRelease:
+		return "release"
+	case model.AgentSpecBackend:
+		return "backend"
+	default:
+		return "architecture"
+	}
 }
 
 func extractInlineContent(raw model.JSON) string {
@@ -1018,6 +1256,30 @@ func extractInlineContent(raw model.JSON) string {
 		return content
 	}
 	return ""
+}
+
+func extractCurrentReworkBrief(raw model.JSON) map[string]any {
+	metadata := map[string]any{}
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return map[string]any{}
+	}
+	brief, ok := metadata["current_rework_brief"].(map[string]any)
+	if !ok {
+		return map[string]any{}
+	}
+	return brief
+}
+
+func (e *Engine) reloadTask(ctx context.Context, task *model.Task, stage string) error {
+	fresh, err := e.services.Task.GetByID(ctx, task.ID)
+	if err != nil {
+		return fmt.Errorf("reload task after %s: %w", stage, err)
+	}
+	if fresh == nil {
+		return fmt.Errorf("task %s disappeared after %s", task.ID, stage)
+	}
+	*task = *fresh
+	return nil
 }
 
 func (e *Engine) processTransitionActions(ctx context.Context, task *model.Task, actions []runtime.TransitionAction) error {

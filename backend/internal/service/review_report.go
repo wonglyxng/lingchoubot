@@ -48,6 +48,20 @@ func (s *ReviewReportService) Create(ctx context.Context, rr *model.ReviewReport
 	if len(rr.Metadata) == 0 {
 		rr.Metadata = model.JSON("{}")
 	}
+	if rr.Verdict == model.ReviewVerdictRejected || rr.Verdict == model.ReviewVerdictNeedsRevision {
+		reworkCount, err := s.nextReworkCount(ctx, rr.TaskID)
+		if err != nil {
+			return fmt.Errorf("resolve rework count: %w", err)
+		}
+		enriched, brief, err := enrichReviewMetadataForRework(rr, reworkCount)
+		if err != nil {
+			return fmt.Errorf("build rework metadata: %w", err)
+		}
+		rr.Metadata = enriched
+		if err := s.attachCurrentReworkBriefToTask(ctx, rr.TaskID, brief); err != nil {
+			return fmt.Errorf("persist task rework brief: %w", err)
+		}
+	}
 
 	if err := s.repo.Create(ctx, rr); err != nil {
 		return fmt.Errorf("create review report: %w", err)
@@ -113,6 +127,42 @@ func (s *ReviewReportService) List(ctx context.Context, p repository.ReviewListP
 	return s.repo.List(ctx, p)
 }
 
+func (s *ReviewReportService) nextReworkCount(ctx context.Context, taskID string) (int, error) {
+	reviews, _, err := s.repo.List(ctx, repository.ReviewListParams{TaskID: taskID, Limit: 1000, Offset: 0})
+	if err != nil {
+		return 0, err
+	}
+	count := 1
+	for _, review := range reviews {
+		if review.Verdict == model.ReviewVerdictRejected || review.Verdict == model.ReviewVerdictNeedsRevision {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (s *ReviewReportService) attachCurrentReworkBriefToTask(ctx context.Context, taskID string, brief map[string]any) error {
+	task, err := s.taskSvc.GetByID(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if task == nil {
+		return fmt.Errorf("task not found")
+	}
+	metadata, err := jsonObject(task.Metadata)
+	if err != nil {
+		return fmt.Errorf("parse task metadata: %w", err)
+	}
+	metadata["current_rework_brief"] = brief
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return fmt.Errorf("marshal task metadata: %w", err)
+	}
+	updated := *task
+	updated.Metadata = model.JSON(encoded)
+	return s.taskSvc.Update(ctx, &updated)
+}
+
 func approvalMetadataFromReview(rr *model.ReviewReport, task *model.Task) (map[string]any, error) {
 	metadata := map[string]any{
 		"review_id":      rr.ID,
@@ -144,6 +194,7 @@ func approvalMetadataFromReview(rr *model.ReviewReport, task *model.Task) (map[s
 	for key, value := range reviewMeta {
 		metadata[key] = value
 	}
+	enrichApprovalScoreSummary(metadata)
 	return metadata, nil
 }
 
@@ -170,4 +221,172 @@ func jsonArrayToStrings(raw model.JSON) ([]string, error) {
 		return nil, fmt.Errorf("parse json array: %w", err)
 	}
 	return items, nil
+}
+
+func enrichApprovalScoreSummary(metadata map[string]any) {
+	hardGateResults, ok := metadata["hard_gate_results"].([]any)
+	if ok {
+		passed := 0
+		for _, item := range hardGateResults {
+			entry, isMap := item.(map[string]any)
+			if !isMap {
+				continue
+			}
+			if passedValue, exists := entry["passed"].(bool); exists && passedValue {
+				passed++
+			}
+		}
+		metadata["hard_gate_total_count"] = len(hardGateResults)
+		metadata["hard_gate_passed_count"] = passed
+	}
+
+	scoreItems, ok := metadata["score_items"].([]any)
+	if !ok {
+		return
+	}
+	summary := make([]map[string]any, 0, len(scoreItems))
+	for _, item := range scoreItems {
+		entry, isMap := item.(map[string]any)
+		if !isMap {
+			continue
+		}
+		summary = append(summary, map[string]any{
+			"key":       entry["key"],
+			"name":      entry["name"],
+			"weight":    entry["weight"],
+			"score":     entry["score"],
+			"max_score": entry["max_score"],
+		})
+	}
+	if len(summary) > 0 {
+		metadata["score_breakdown_summary"] = summary
+	}
+}
+
+func enrichReviewMetadataForRework(rr *model.ReviewReport, reworkCount int) (model.JSON, map[string]any, error) {
+	metadata, err := jsonObject(rr.Metadata)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse review metadata: %w", err)
+	}
+	brief := buildReworkBrief(metadata, rr, reworkCount)
+	metadata["rework_count"] = reworkCount
+	metadata["rework_brief"] = brief
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal review metadata: %w", err)
+	}
+	return model.JSON(encoded), brief, nil
+}
+
+func buildReworkBrief(metadata map[string]any, rr *model.ReviewReport, reworkCount int) map[string]any {
+	failedHardGateKeys := extractFailedHardGateKeys(metadata["hard_gate_results"])
+	lowScoreItemKeys := extractLowScoreItemKeys(metadata["score_items"])
+	mustFixItems := extractStringSlice(metadata["must_fix_items"])
+	if len(mustFixItems) == 0 {
+		if findings, err := jsonArrayToStrings(rr.Findings); err == nil {
+			mustFixItems = findings
+		}
+	}
+	suggestions := extractStringSlice(metadata["suggestions"])
+	if len(suggestions) == 0 {
+		if recommendations, err := jsonArrayToStrings(rr.Recommendations); err == nil {
+			suggestions = recommendations
+		}
+	}
+	return map[string]any{
+		"attempt":                reworkCount,
+		"failed_hard_gate_keys":  failedHardGateKeys,
+		"low_score_item_keys":    lowScoreItemKeys,
+		"must_fix_items":         mustFixItems,
+		"suggestions":            suggestions,
+		"requires_clarification": len(failedHardGateKeys) > 0,
+	}
+}
+
+func jsonObject(raw model.JSON) (map[string]any, error) {
+	if len(raw) == 0 {
+		return map[string]any{}, nil
+	}
+	parsed := map[string]any{}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, err
+	}
+	return parsed, nil
+}
+
+func extractFailedHardGateKeys(raw any) []string {
+	items, ok := raw.([]any)
+	if !ok {
+		return []string{}
+	}
+	keys := make([]string, 0, len(items))
+	for _, item := range items {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		passed, _ := entry["passed"].(bool)
+		if passed {
+			continue
+		}
+		key, _ := entry["key"].(string)
+		if key != "" {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+func extractLowScoreItemKeys(raw any) []string {
+	items, ok := raw.([]any)
+	if !ok {
+		return []string{}
+	}
+	keys := make([]string, 0, len(items))
+	for _, item := range items {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		score, scoreOK := numberToInt(entry["score"])
+		maxScore, maxOK := numberToInt(entry["max_score"])
+		key, _ := entry["key"].(string)
+		if !scoreOK || !maxOK || maxScore <= 0 || key == "" {
+			continue
+		}
+		if score*100 < maxScore*70 {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+func extractStringSlice(raw any) []string {
+	items, ok := raw.([]any)
+	if !ok {
+		return []string{}
+	}
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		text, ok := item.(string)
+		if ok && text != "" {
+			result = append(result, text)
+		}
+	}
+	return result
+}
+
+func numberToInt(raw any) (int, bool) {
+	switch value := raw.(type) {
+	case int:
+		return value, true
+	case int32:
+		return int(value), true
+	case int64:
+		return int(value), true
+	case float64:
+		return int(value), true
+	default:
+		return 0, false
+	}
 }

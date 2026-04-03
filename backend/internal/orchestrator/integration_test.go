@@ -211,6 +211,117 @@ func TestIntegration_HappyPath(t *testing.T) {
 	}
 }
 
+func TestIntegration_ReviewPolicyAndScorecardMetadata(t *testing.T) {
+	ctx := context.Background()
+	f := testutil.NewFixture()
+
+	if err := f.SeedStandardAgents(ctx); err != nil {
+		t.Fatalf("seed agents: %v", err)
+	}
+
+	proj := &model.Project{Name: "评分卡元数据项目", Description: "验证契约与评审报告元数据"}
+	if err := f.ProjectSvc.Create(ctx, proj); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	run, err := f.Engine.Run(ctx, proj.ID)
+	if err != nil {
+		t.Fatalf("Engine.Run: %v", err)
+	}
+
+	reviews, total, err := f.ReviewRepo.List(ctx, repository.ReviewListParams{RunID: run.ID, Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("list reviews: %v", err)
+	}
+	if total == 0 {
+		t.Fatal("expected review reports to be created")
+	}
+	for _, review := range reviews {
+		var meta struct {
+			TemplateKey     string `json:"template_key"`
+			TaskCategory    string `json:"task_category"`
+			PassThreshold   int    `json:"pass_threshold"`
+			TotalScore      int    `json:"total_score"`
+			HardGateResults []struct {
+				Key    string `json:"key"`
+				Passed bool   `json:"passed"`
+			} `json:"hard_gate_results"`
+			ScoreItems []struct {
+				Key      string `json:"key"`
+				Weight   int    `json:"weight"`
+				Score    int    `json:"score"`
+				MaxScore int    `json:"max_score"`
+			} `json:"score_items"`
+		}
+		if err := json.Unmarshal(review.Metadata, &meta); err != nil {
+			t.Fatalf("unmarshal review metadata: %v", err)
+		}
+		if meta.TemplateKey == "" {
+			t.Fatalf("review %q missing template_key", review.ID)
+		}
+		if meta.TaskCategory == "" {
+			t.Fatalf("review %q missing task_category", review.ID)
+		}
+		if meta.PassThreshold <= 0 {
+			t.Fatalf("review %q pass_threshold = %d, want > 0", review.ID, meta.PassThreshold)
+		}
+		if meta.TotalScore <= 0 {
+			t.Fatalf("review %q total_score = %d, want > 0", review.ID, meta.TotalScore)
+		}
+		if len(meta.HardGateResults) == 0 {
+			t.Fatalf("review %q missing hard_gate_results", review.ID)
+		}
+		if len(meta.ScoreItems) == 0 {
+			t.Fatalf("review %q missing score_items", review.ID)
+		}
+
+		contract, err := f.ContractSvc.GetLatestByTaskID(ctx, review.TaskID)
+		if err != nil {
+			t.Fatalf("load latest contract for task %q: %v", review.TaskID, err)
+		}
+		if contract == nil {
+			t.Fatalf("missing latest contract for task %q", review.TaskID)
+		}
+		var contractMeta struct {
+			TaskCategory      string `json:"task_category"`
+			ReviewTemplateKey string `json:"review_template_key"`
+			ReviewPolicy      struct {
+				TemplateKey   string `json:"template_key"`
+				TaskCategory  string `json:"task_category"`
+				PassThreshold int    `json:"pass_threshold"`
+				HardGates     []struct {
+					Key string `json:"key"`
+				} `json:"hard_gates"`
+				ScoreItems []struct {
+					Key    string `json:"key"`
+					Weight int    `json:"weight"`
+				} `json:"score_items"`
+			} `json:"review_policy"`
+		}
+		if err := json.Unmarshal(contract.Metadata, &contractMeta); err != nil {
+			t.Fatalf("unmarshal contract metadata: %v", err)
+		}
+		if contractMeta.TaskCategory == "" {
+			t.Fatalf("contract %q missing task_category metadata", contract.ID)
+		}
+		if contractMeta.ReviewTemplateKey == "" {
+			t.Fatalf("contract %q missing review_template_key metadata", contract.ID)
+		}
+		if contractMeta.ReviewPolicy.TemplateKey == "" {
+			t.Fatalf("contract %q missing review_policy.template_key", contract.ID)
+		}
+		if contractMeta.ReviewPolicy.PassThreshold <= 0 {
+			t.Fatalf("contract %q review policy pass_threshold = %d, want > 0", contract.ID, contractMeta.ReviewPolicy.PassThreshold)
+		}
+		if len(contractMeta.ReviewPolicy.HardGates) == 0 {
+			t.Fatalf("contract %q review policy missing hard gates", contract.ID)
+		}
+		if len(contractMeta.ReviewPolicy.ScoreItems) == 0 {
+			t.Fatalf("contract %q review policy missing score items", contract.ID)
+		}
+	}
+}
+
 func TestIntegration_MissingReviewerPrecheckFails(t *testing.T) {
 	ctx := context.Background()
 	f := testutil.NewFixture()
@@ -279,6 +390,14 @@ func (r *reworkReviewer) Execute(input *runtime.AgentTaskInput) (*runtime.AgentT
 	r.mu.Unlock()
 
 	if n <= 1 { // reject first review per task
+		templateKey := "architecture_v1"
+		passThreshold := 80
+		hardGateResults := []runtime.HardGateResultAction{{Key: "goal_match", Passed: true, Reason: "目标匹配"}, {Key: "acceptance_testable", Passed: false, Reason: "验收标准不可验证"}}
+		scoreItems := []runtime.ScoreItemResultAction{{Key: "executability", Name: "可执行性", Weight: 20, Score: 10, MaxScore: 20, Reason: "步骤不完整"}}
+		if input != nil && input.Contract != nil && input.Contract.ReviewPolicy != nil {
+			templateKey = input.Contract.ReviewPolicy.TemplateKey
+			passThreshold = input.Contract.ReviewPolicy.PassThreshold
+		}
 		return &runtime.AgentTaskOutput{
 			Status:  runtime.OutputStatusSuccess,
 			Summary: "评审打回，需修改",
@@ -287,8 +406,29 @@ func (r *reworkReviewer) Execute(input *runtime.AgentTaskInput) (*runtime.AgentT
 				Summary:         "交付物不满足要求，需返工",
 				Findings:        []string{"内容不完整"},
 				Recommendations: []string{"请补充细节"},
+				TemplateKey:     templateKey,
+				PassThreshold:   passThreshold,
+				TotalScore:      62,
+				HardGateResults: hardGateResults,
+				ScoreItems:      scoreItems,
+				MustFixItems:    []string{"补充验收标准", "补充执行步骤"},
+				Suggestions:     []string{"补充异常流程"},
 			}},
 		}, nil
+	}
+	templateKey := "architecture_v1"
+	passThreshold := 80
+	var hardGateResults []runtime.HardGateResultAction
+	var scoreItems []runtime.ScoreItemResultAction
+	if input != nil && input.Contract != nil && input.Contract.ReviewPolicy != nil {
+		templateKey = input.Contract.ReviewPolicy.TemplateKey
+		passThreshold = input.Contract.ReviewPolicy.PassThreshold
+		for _, gate := range input.Contract.ReviewPolicy.HardGates {
+			hardGateResults = append(hardGateResults, runtime.HardGateResultAction{Key: gate.Key, Passed: true, Reason: "满足要求"})
+		}
+		for _, item := range input.Contract.ReviewPolicy.ScoreItems {
+			scoreItems = append(scoreItems, runtime.ScoreItemResultAction{Key: item.Key, Name: item.Name, Weight: item.Weight, Score: item.Weight, MaxScore: item.Weight, Reason: "满足要求"})
+		}
 	}
 	return &runtime.AgentTaskOutput{
 		Status:  runtime.OutputStatusSuccess,
@@ -298,6 +438,11 @@ func (r *reworkReviewer) Execute(input *runtime.AgentTaskInput) (*runtime.AgentT
 			Summary:         "交付物已通过评审",
 			Findings:        []string{"内容完整"},
 			Recommendations: []string{},
+			TemplateKey:     templateKey,
+			PassThreshold:   passThreshold,
+			TotalScore:      100,
+			HardGateResults: hardGateResults,
+			ScoreItems:      scoreItems,
 		}},
 	}, nil
 }
@@ -316,6 +461,13 @@ func (r *alwaysRejectReviewer) Execute(_ *runtime.AgentTaskInput) (*runtime.Agen
 			Summary:         "不合格，需返工",
 			Findings:        []string{"内容不完整"},
 			Recommendations: []string{"请补充"},
+			TemplateKey:     "architecture_v1",
+			PassThreshold:   80,
+			TotalScore:      55,
+			HardGateResults: []runtime.HardGateResultAction{{Key: "goal_match", Passed: false, Reason: "目标未满足"}},
+			ScoreItems:      []runtime.ScoreItemResultAction{{Key: "executability", Name: "可执行性", Weight: 20, Score: 8, MaxScore: 20, Reason: "执行步骤不完整"}},
+			MustFixItems:    []string{"补充目标范围", "补充执行步骤"},
+			Suggestions:     []string{"必要时补充人工澄清"},
 		}},
 	}, nil
 }
@@ -470,6 +622,43 @@ func TestIntegration_ReworkPath(t *testing.T) {
 		t.Errorf("reviewer calls = %d, want 4", totalCalls)
 	}
 
+	reworkBriefCount := 0
+	analysisPhase := ""
+	phases, err := f.PhaseSvc.ListByProject(ctx, proj.ID)
+	if err != nil {
+		t.Fatalf("list phases: %v", err)
+	}
+	for _, phase := range phases {
+		if phase.Name == "需求分析" {
+			analysisPhase = phase.ID
+			break
+		}
+	}
+	if analysisPhase == "" {
+		t.Fatal("需求分析阶段不存在")
+	}
+	analysisTasks, _, err := f.TaskSvc.List(ctx, repository.TaskListParams{PhaseID: analysisPhase, Limit: 100})
+	if err != nil {
+		t.Fatalf("list analysis tasks: %v", err)
+	}
+	for _, task := range analysisTasks {
+		var taskMeta struct {
+			CurrentReworkBrief struct {
+				Attempt      int      `json:"attempt"`
+				MustFixItems []string `json:"must_fix_items"`
+			} `json:"current_rework_brief"`
+		}
+		if err := json.Unmarshal(task.Metadata, &taskMeta); err != nil {
+			t.Fatalf("unmarshal task metadata: %v", err)
+		}
+		if taskMeta.CurrentReworkBrief.Attempt != 1 {
+			t.Fatalf("task %q current_rework_brief.attempt = %d, want 1", task.Title, taskMeta.CurrentReworkBrief.Attempt)
+		}
+		if len(taskMeta.CurrentReworkBrief.MustFixItems) == 0 {
+			t.Fatalf("task %q current_rework_brief.must_fix_items should not be empty", task.Title)
+		}
+	}
+
 	// Check for rework audit events
 	reworkCount := 0
 	for _, e := range f.AuditRepo.Entries() {
@@ -481,10 +670,51 @@ func TestIntegration_ReworkPath(t *testing.T) {
 		t.Errorf("rework events = %d, want 2", reworkCount)
 	}
 
-	// Steps: PM(1) + 2 tasks * (supervisor + worker + reviewer + worker + reviewer) = 11
+	reviews, total, err := f.ReviewRepo.List(ctx, repository.ReviewListParams{RunID: run.ID, Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("list reviews: %v", err)
+	}
+	if total != 4 {
+		t.Fatalf("review total = %d, want 4", total)
+	}
+	for _, review := range reviews {
+		if review.Verdict != model.ReviewVerdictNeedsRevision {
+			continue
+		}
+		var reviewMeta struct {
+			ReworkBrief struct {
+				Attempt      int      `json:"attempt"`
+				MustFixItems []string `json:"must_fix_items"`
+			} `json:"rework_brief"`
+		}
+		if err := json.Unmarshal(review.Metadata, &reviewMeta); err != nil {
+			t.Fatalf("unmarshal review metadata: %v", err)
+		}
+		if reviewMeta.ReworkBrief.Attempt != 1 {
+			t.Fatalf("review %q rework_brief.attempt = %d, want 1", review.ID, reviewMeta.ReworkBrief.Attempt)
+		}
+		if len(reviewMeta.ReworkBrief.MustFixItems) == 0 {
+			t.Fatalf("review %q rework_brief.must_fix_items should not be empty", review.ID)
+		}
+		reworkBriefCount++
+	}
+	if reworkBriefCount != 2 {
+		t.Fatalf("reviews with rework_brief = %d, want 2", reworkBriefCount)
+	}
+
+	// Steps: PM(1) + 2 tasks * (supervisor + worker + reviewer + supervisor + worker + reviewer) = 13
 	steps := f.WorkflowStepRepo.StepsForRun(run.ID)
-	if len(steps) != 11 {
-		t.Errorf("workflow steps = %d, want 11", len(steps))
+	if len(steps) != 13 {
+		t.Errorf("workflow steps = %d, want 13", len(steps))
+	}
+	supervisorSteps := 0
+	for _, step := range steps {
+		if step.AgentRole == "supervisor" {
+			supervisorSteps++
+		}
+	}
+	if supervisorSteps != 4 {
+		t.Errorf("supervisor steps = %d, want 4", supervisorSteps)
 	}
 }
 
@@ -512,9 +742,9 @@ func TestIntegration_MaxReworkExceeded(t *testing.T) {
 		t.Fatalf("Engine.Run: %v", err)
 	}
 
-	// The first task to exceed max rework attempts should fail the whole run.
-	if run.Status != model.WorkflowRunFailed {
-		t.Errorf("run status = %q, want %q", run.Status, model.WorkflowRunFailed)
+	// The first task to exceed max rework attempts should wait for manual intervention.
+	if run.Status != model.WorkflowRunWaitingManual {
+		t.Errorf("run status = %q, want %q", run.Status, model.WorkflowRunWaitingManual)
 	}
 
 	// Only the first failing task should consume the full rework budget before the run aborts.
@@ -522,8 +752,11 @@ func TestIntegration_MaxReworkExceeded(t *testing.T) {
 	if reviewCount != 4 {
 		t.Errorf("reviews = %d, want 4", reviewCount)
 	}
-	hasFailed, hasCompleted := false, false
+	hasWaitingManual, hasFailed, hasCompleted := false, false, false
 	for _, entry := range f.AuditRepo.Entries() {
+		if entry.EventType == "workflow.waiting_manual_intervention" {
+			hasWaitingManual = true
+		}
 		if entry.EventType == "workflow.failed" {
 			hasFailed = true
 		}
@@ -531,8 +764,11 @@ func TestIntegration_MaxReworkExceeded(t *testing.T) {
 			hasCompleted = true
 		}
 	}
-	if !hasFailed {
-		t.Error("missing workflow.failed audit event")
+	if !hasWaitingManual {
+		t.Error("missing workflow.waiting_manual_intervention audit event")
+	}
+	if hasFailed {
+		t.Error("unexpected workflow.failed audit event")
 	}
 	if hasCompleted {
 		t.Error("unexpected workflow.completed audit event")

@@ -795,6 +795,17 @@ func TestReviewReportApprovedCreatesApprovalAndTransitionsTask(t *testing.T) {
 		Recommendations:   model.JSON(`["可以进入审批"]`),
 		Metadata: model.JSON(`{
 			"artifact_count": 1,
+			"template_key": "prd_v1",
+			"pass_threshold": 80,
+			"total_score": 87,
+			"hard_gate_results": [
+				{"key": "goal_match", "passed": true, "reason": "匹配任务目标"},
+				{"key": "acceptance_testable", "passed": true, "reason": "验收标准可验证"}
+			],
+			"score_items": [
+				{"key": "completeness", "name": "完整性", "weight": 25, "score": 22, "max_score": 25, "reason": "主体结构完整"},
+				{"key": "executability", "name": "可执行性", "weight": 20, "score": 18, "max_score": 20, "reason": "具备执行指导性"}
+			],
 			"artifacts": [
 				{
 					"name": "需求文档",
@@ -824,14 +835,26 @@ func TestReviewReportApprovedCreatesApprovalAndTransitionsTask(t *testing.T) {
 			t.Fatalf("approval request project_id = %q, want %q", ar.ProjectID, "proj-1")
 		}
 		var meta struct {
-			RunID             string   `json:"run_id"`
-			PhaseID           string   `json:"phase_id"`
-			ReviewID          string   `json:"review_id"`
-			ReviewSummary     string   `json:"review_summary"`
-			Findings          []string `json:"findings"`
-			Recommendations   []string `json:"recommendations"`
-			ArtifactCount     int      `json:"artifact_count"`
-			ArtifactVersionID string   `json:"artifact_version_id"`
+			RunID                 string   `json:"run_id"`
+			PhaseID               string   `json:"phase_id"`
+			ReviewID              string   `json:"review_id"`
+			ReviewSummary         string   `json:"review_summary"`
+			TemplateKey           string   `json:"template_key"`
+			PassThreshold         int      `json:"pass_threshold"`
+			TotalScore            int      `json:"total_score"`
+			HardGatePassedCount   int      `json:"hard_gate_passed_count"`
+			HardGateTotalCount    int      `json:"hard_gate_total_count"`
+			ArtifactCount         int      `json:"artifact_count"`
+			ArtifactVersionID     string   `json:"artifact_version_id"`
+			Findings              []string `json:"findings"`
+			Recommendations       []string `json:"recommendations"`
+			ScoreBreakdownSummary []struct {
+				Key      string `json:"key"`
+				Name     string `json:"name"`
+				Weight   int    `json:"weight"`
+				Score    int    `json:"score"`
+				MaxScore int    `json:"max_score"`
+			} `json:"score_breakdown_summary"`
 		}
 		if err := json.Unmarshal(ar.Metadata, &meta); err != nil {
 			t.Fatalf("unmarshal approval metadata: %v", err)
@@ -848,6 +871,21 @@ func TestReviewReportApprovedCreatesApprovalAndTransitionsTask(t *testing.T) {
 		if meta.ReviewSummary != "looks good" {
 			t.Fatalf("approval metadata review_summary = %q, want %q", meta.ReviewSummary, "looks good")
 		}
+		if meta.TemplateKey != "prd_v1" {
+			t.Fatalf("approval metadata template_key = %q, want %q", meta.TemplateKey, "prd_v1")
+		}
+		if meta.PassThreshold != 80 {
+			t.Fatalf("approval metadata pass_threshold = %d, want 80", meta.PassThreshold)
+		}
+		if meta.TotalScore != 87 {
+			t.Fatalf("approval metadata total_score = %d, want 87", meta.TotalScore)
+		}
+		if meta.HardGatePassedCount != 2 {
+			t.Fatalf("approval metadata hard_gate_passed_count = %d, want 2", meta.HardGatePassedCount)
+		}
+		if meta.HardGateTotalCount != 2 {
+			t.Fatalf("approval metadata hard_gate_total_count = %d, want 2", meta.HardGateTotalCount)
+		}
 		if meta.ArtifactCount != 1 {
 			t.Fatalf("approval metadata artifact_count = %d, want 1", meta.ArtifactCount)
 		}
@@ -859,6 +897,12 @@ func TestReviewReportApprovedCreatesApprovalAndTransitionsTask(t *testing.T) {
 		}
 		if len(meta.Recommendations) != 1 || meta.Recommendations[0] != "可以进入审批" {
 			t.Fatalf("approval metadata recommendations = %#v, want [可以进入审批]", meta.Recommendations)
+		}
+		if len(meta.ScoreBreakdownSummary) != 2 {
+			t.Fatalf("approval metadata score_breakdown_summary len = %d, want 2", len(meta.ScoreBreakdownSummary))
+		}
+		if meta.ScoreBreakdownSummary[0].Key != "completeness" || meta.ScoreBreakdownSummary[0].Score != 22 {
+			t.Fatalf("approval metadata first score breakdown = %#v, want completeness 22", meta.ScoreBreakdownSummary[0])
 		}
 		if !strings.Contains(ar.Description, "looks good") {
 			t.Fatalf("approval description = %q, want to contain review summary", ar.Description)
@@ -962,6 +1006,19 @@ func TestReviewReportRejectedDoesNotCreateApproval(t *testing.T) {
 		ReviewerID: "reviewer-1",
 		Verdict:    model.ReviewVerdictRejected,
 		Summary:    "needs work",
+		Metadata: model.JSON(`{
+			"template_key": "prd_v1",
+			"pass_threshold": 80,
+			"total_score": 62,
+			"hard_gate_results": [
+				{"key": "acceptance_testable", "passed": false, "reason": "验收标准不可验证"}
+			],
+			"score_items": [
+				{"key": "executability", "name": "可执行性", "weight": 20, "score": 10, "max_score": 20, "reason": "执行步骤缺失"}
+			],
+			"must_fix_items": ["补充验收标准", "补充执行步骤"],
+			"suggestions": ["补充异常流程"]
+		}`),
 	}
 	if err := reviewSvc.Create(ctx, rr); err != nil {
 		t.Fatalf("Create returned error: %v", err)
@@ -970,6 +1027,58 @@ func TestReviewReportRejectedDoesNotCreateApproval(t *testing.T) {
 	// Task should be in revision_required
 	if got := taskRepo.tasks["task-1"].Status; got != model.TaskStatusRevisionRequired {
 		t.Fatalf("expected task status %q, got %q", model.TaskStatusRevisionRequired, got)
+	}
+	storedReview, ok := reviewRepo.reviews[rr.ID]
+	if !ok {
+		t.Fatalf("stored review %q not found", rr.ID)
+	}
+	var reviewMeta struct {
+		ReworkCount int `json:"rework_count"`
+		ReworkBrief struct {
+			Attempt               int      `json:"attempt"`
+			FailedHardGateKeys    []string `json:"failed_hard_gate_keys"`
+			LowScoreItemKeys      []string `json:"low_score_item_keys"`
+			MustFixItems          []string `json:"must_fix_items"`
+			Suggestions           []string `json:"suggestions"`
+			RequiresClarification bool     `json:"requires_clarification"`
+		} `json:"rework_brief"`
+	}
+	if err := json.Unmarshal(storedReview.Metadata, &reviewMeta); err != nil {
+		t.Fatalf("unmarshal stored review metadata: %v", err)
+	}
+	if reviewMeta.ReworkCount != 1 {
+		t.Fatalf("review metadata rework_count = %d, want 1", reviewMeta.ReworkCount)
+	}
+	if reviewMeta.ReworkBrief.Attempt != 1 {
+		t.Fatalf("review metadata rework_brief.attempt = %d, want 1", reviewMeta.ReworkBrief.Attempt)
+	}
+	if len(reviewMeta.ReworkBrief.FailedHardGateKeys) != 1 || reviewMeta.ReworkBrief.FailedHardGateKeys[0] != "acceptance_testable" {
+		t.Fatalf("review metadata failed_hard_gate_keys = %#v, want [acceptance_testable]", reviewMeta.ReworkBrief.FailedHardGateKeys)
+	}
+	if len(reviewMeta.ReworkBrief.LowScoreItemKeys) != 1 || reviewMeta.ReworkBrief.LowScoreItemKeys[0] != "executability" {
+		t.Fatalf("review metadata low_score_item_keys = %#v, want [executability]", reviewMeta.ReworkBrief.LowScoreItemKeys)
+	}
+	if len(reviewMeta.ReworkBrief.MustFixItems) != 2 {
+		t.Fatalf("review metadata must_fix_items len = %d, want 2", len(reviewMeta.ReworkBrief.MustFixItems))
+	}
+	if !reviewMeta.ReworkBrief.RequiresClarification {
+		t.Fatal("expected review metadata to require clarification when hard gates fail")
+	}
+	var taskMeta struct {
+		CurrentReworkBrief struct {
+			Attempt            int      `json:"attempt"`
+			FailedHardGateKeys []string `json:"failed_hard_gate_keys"`
+			MustFixItems       []string `json:"must_fix_items"`
+		} `json:"current_rework_brief"`
+	}
+	if err := json.Unmarshal(taskRepo.tasks["task-1"].Metadata, &taskMeta); err != nil {
+		t.Fatalf("unmarshal task metadata: %v", err)
+	}
+	if taskMeta.CurrentReworkBrief.Attempt != 1 {
+		t.Fatalf("task metadata current_rework_brief.attempt = %d, want 1", taskMeta.CurrentReworkBrief.Attempt)
+	}
+	if len(taskMeta.CurrentReworkBrief.FailedHardGateKeys) != 1 || taskMeta.CurrentReworkBrief.FailedHardGateKeys[0] != "acceptance_testable" {
+		t.Fatalf("task metadata failed_hard_gate_keys = %#v, want [acceptance_testable]", taskMeta.CurrentReworkBrief.FailedHardGateKeys)
 	}
 	// No approval request should have been created
 	if len(approvalRepo.approvals) != 0 {

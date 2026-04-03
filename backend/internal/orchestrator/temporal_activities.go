@@ -292,7 +292,7 @@ func (a *Activities) ActivitySupervisor(ctx context.Context, input TaskChainInpu
 	}
 
 	eng := &Engine{registry: a.Registry, services: a.Services, workflow: a.Workflow, logger: a.Logger}
-	if err := eng.processContractActions(ctx, task.ID, output.Contracts); err != nil {
+	if err := eng.processContractActions(ctx, task, output.Contracts); err != nil {
 		st.fail(ctx, err.Error())
 		return nil, err
 	}
@@ -351,10 +351,11 @@ func (a *Activities) ActivityWorker(ctx context.Context, input TaskChainInput) (
 		return nil, err
 	}
 
-	var contractCtx *runtime.ContractCtx
-	contract, _ := a.Services.Contract.GetLatestByTaskID(ctx, task.ID)
-	if contract != nil {
-		contractCtx = &runtime.ContractCtx{ID: contract.ID, Scope: contract.Scope}
+	eng := &Engine{registry: a.Registry, services: a.Services, workflow: a.Workflow, logger: a.Logger}
+	contractCtx, err := eng.loadContractContext(ctx, task)
+	if err != nil {
+		st.fail(ctx, err.Error())
+		return nil, err
 	}
 
 	taskInput := &runtime.AgentTaskInput{
@@ -381,7 +382,6 @@ func (a *Activities) ActivityWorker(ctx context.Context, input TaskChainInput) (
 		return nil, temporalManualInterventionError(output.Error)
 	}
 
-	eng := &Engine{registry: a.Registry, services: a.Services, workflow: a.Workflow, logger: a.Logger}
 	if err := eng.processArtifactActions(ctx, proj.ID, task.ID, agent.ID, output.Artifacts); err != nil {
 		st.fail(ctx, err.Error())
 		return nil, err
@@ -438,6 +438,11 @@ func (a *Activities) ActivityReviewer(ctx context.Context, input TaskChainInput)
 		st.fail(ctx, err.Error())
 		return nil, err
 	}
+	contractCtx, err := eng.loadContractContext(ctx, task)
+	if err != nil {
+		st.fail(ctx, err.Error())
+		return nil, err
+	}
 	var phaseCtx *runtime.PhaseCtx
 	if input.PhaseID != "" {
 		phase, phaseErr := a.Services.Phase.GetByID(ctx, input.PhaseID)
@@ -459,6 +464,7 @@ func (a *Activities) ActivityReviewer(ctx context.Context, input TaskChainInput)
 		Project:     &runtime.ProjectCtx{ID: proj.ID, Name: proj.Name, Description: proj.Description},
 		Phase:       phaseCtx,
 		Task:        &runtime.TaskCtx{ID: task.ID, ProjectID: proj.ID, PhaseID: input.PhaseID, Title: task.Title, Description: task.Description, Priority: task.Priority},
+		Contract:    contractCtx,
 		Artifacts:   artifactCtxs,
 	}
 
@@ -475,7 +481,7 @@ func (a *Activities) ActivityReviewer(ctx context.Context, input TaskChainInput)
 		return nil, temporalManualInterventionError(output.Error)
 	}
 
-	if err := eng.processReviewActions(ctx, input.RunID, task.ID, agent.ID, artifactCtxs, output.Reviews); err != nil {
+	if err := eng.processReviewActions(ctx, input.RunID, task.ID, agent.ID, artifactCtxs, contractCtx, output.Reviews); err != nil {
 		st.fail(ctx, err.Error())
 		return nil, err
 	}
@@ -526,8 +532,29 @@ func (a *Activities) ActivityCheckRework(ctx context.Context, input CheckReworkI
 	}
 
 	a.Logger.Info("rework triggered (Temporal)", "task", task.Title, "attempt", input.Attempt)
-	// Transition back to in_progress for the rework cycle
-	_ = a.Services.Task.TransitionStatus(ctx, task.ID, model.TaskStatusInProgress)
+	a.Services.Audit.LogEvent(ctx, "system", "", "task.rework",
+		fmt.Sprintf("任务「%s」评审打回，第 %d 次返工，回到责任主管", task.Title, input.Attempt),
+		"task", task.ID, nil, map[string]any{
+			"attempt":             input.Attempt,
+			"owner_supervisor_id": stringOrEmpty(task.OwnerSupervisorID),
+			"rework_brief":        extractCurrentReworkBrief(task.Metadata),
+		})
+
+	if input.Attempt > maxReworkAttempts {
+		proj, projErr := a.Services.Project.GetByID(ctx, input.ProjectID)
+		if projErr != nil {
+			return false, fmt.Errorf("load project for manual intervention: %w", projErr)
+		}
+		if proj == nil {
+			return false, fmt.Errorf("project %s not found", input.ProjectID)
+		}
+		reason := fmt.Sprintf("任务「%s」超过最大返工次数（%d），需要人工介入", task.Title, maxReworkAttempts)
+		if waitErr := a.waitForManualIntervention(ctx, input.RunID, proj, "supervisor", input.PhaseID, task.ID, task.Title, reason); waitErr != nil {
+			return false, waitErr
+		}
+		return false, temporalManualInterventionError(reason)
+	}
+
 	return true, nil
 }
 

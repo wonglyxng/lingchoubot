@@ -95,21 +95,20 @@ func ProjectWorkflow(ctx workflow.Context, input ProjectWorkflowInput) error {
 				SortOffset: stepCount,
 			}
 
-			// Supervisor
-			var supResult StepResult
-			err = workflow.ExecuteActivity(ctx, "ActivitySupervisor", chainInput).Get(ctx, &supResult)
-			if err != nil {
-				if isTemporalManualInterventionError(err) {
-					return nil
-				}
-				return failRun(fmt.Sprintf("supervisor activity failed for task %s", taskID), err)
-			}
-			stepCount = supResult.StepCount
-			chainInput.SortOffset = stepCount
-
-			// Worker → Reviewer with rework loop
+			// Supervisor → Worker → Reviewer with rework loop
 			const maxReworkAttempts = 3
 			for attempt := 0; attempt <= maxReworkAttempts; attempt++ {
+				var supResult StepResult
+				err = workflow.ExecuteActivity(ctx, "ActivitySupervisor", chainInput).Get(ctx, &supResult)
+				if err != nil {
+					if isTemporalManualInterventionError(err) {
+						return nil
+					}
+					return failRun(fmt.Sprintf("supervisor activity failed for task %s", taskID), err)
+				}
+				stepCount = supResult.StepCount
+				chainInput.SortOffset = stepCount
+
 				// Worker
 				var workerResult StepResult
 				chainInput.SortOffset = stepCount
@@ -138,10 +137,16 @@ func ProjectWorkflow(ctx workflow.Context, input ProjectWorkflowInput) error {
 				// Check if rework needed
 				var needsRework bool
 				checkErr := workflow.ExecuteActivity(ctx, "ActivityCheckRework", CheckReworkInput{
-					TaskID:  taskID,
-					Attempt: attempt + 1,
+					RunID:     input.RunID,
+					ProjectID: input.ProjectID,
+					PhaseID:   phaseID,
+					TaskID:    taskID,
+					Attempt:   attempt + 1,
 				}).Get(ctx, &needsRework)
 				if checkErr != nil {
+					if isTemporalManualInterventionError(checkErr) {
+						return nil
+					}
 					return failRun(fmt.Sprintf("rework check failed for task %s", taskID), checkErr)
 				}
 				if !needsRework {
@@ -187,6 +192,9 @@ type CompleteRunInput struct {
 }
 
 type CheckReworkInput struct {
-	TaskID  string `json:"task_id"`
-	Attempt int    `json:"attempt"`
+	RunID     string `json:"run_id"`
+	ProjectID string `json:"project_id"`
+	PhaseID   string `json:"phase_id"`
+	TaskID    string `json:"task_id"`
+	Attempt   int    `json:"attempt"`
 }

@@ -123,6 +123,52 @@ func (r *reviewerTestRunner) Execute(input *runtime.AgentTaskInput) (*runtime.Ag
 	if input != nil {
 		artifactCount = len(input.Artifacts)
 	}
+	templateKey := "architecture_v1"
+	passThreshold := 80
+	var hardGateResults []runtime.HardGateResultAction
+	var scoreItems []runtime.ScoreItemResultAction
+	if input != nil && input.Contract != nil && input.Contract.ReviewPolicy != nil {
+		templateKey = input.Contract.ReviewPolicy.TemplateKey
+		passThreshold = input.Contract.ReviewPolicy.PassThreshold
+		hardGateResults = make([]runtime.HardGateResultAction, 0, len(input.Contract.ReviewPolicy.HardGates))
+		for _, gate := range input.Contract.ReviewPolicy.HardGates {
+			hardGateResults = append(hardGateResults, runtime.HardGateResultAction{
+				Key:    gate.Key,
+				Passed: true,
+				Reason: fmt.Sprintf("任务「%s」满足 %s", taskTitle, gate.Name),
+			})
+		}
+		scoreItems = make([]runtime.ScoreItemResultAction, 0, len(input.Contract.ReviewPolicy.ScoreItems))
+		totalScore := 0
+		for _, item := range input.Contract.ReviewPolicy.ScoreItems {
+			score := item.Weight
+			totalScore += score
+			scoreItems = append(scoreItems, runtime.ScoreItemResultAction{
+				Key:      item.Key,
+				Name:     item.Name,
+				Weight:   item.Weight,
+				Score:    score,
+				MaxScore: item.Weight,
+				Reason:   fmt.Sprintf("任务「%s」在 %s 维度表现稳定", taskTitle, item.Name),
+			})
+		}
+		return &runtime.AgentTaskOutput{
+			Status:  runtime.OutputStatusSuccess,
+			Summary: fmt.Sprintf("任务「%s」评审完成，%d 个交付物已通过评审", taskTitle, artifactCount),
+			Reviews: []runtime.ReviewAction{{
+				Verdict:         "approved",
+				Summary:         fmt.Sprintf("任务「%s」交付物内容完整，允许推进审批", taskTitle),
+				Findings:        []string{"交付物与任务目标一致", "内容结构完整且可追踪"},
+				Recommendations: []string{"进入审批阶段前补充一次最终人工复核"},
+				TemplateKey:     templateKey,
+				PassThreshold:   passThreshold,
+				TotalScore:      totalScore,
+				HardGateResults: hardGateResults,
+				ScoreItems:      scoreItems,
+				Suggestions:     []string{"后续可增加一次人工 spot check 作为补充"},
+			}},
+		}, nil
+	}
 	return &runtime.AgentTaskOutput{
 		Status:  runtime.OutputStatusSuccess,
 		Summary: fmt.Sprintf("任务「%s」评审完成，%d 个交付物已通过评审", taskTitle, artifactCount),
@@ -131,6 +177,9 @@ func (r *reviewerTestRunner) Execute(input *runtime.AgentTaskInput) (*runtime.Ag
 			Summary:         fmt.Sprintf("任务「%s」交付物内容完整，允许推进审批", taskTitle),
 			Findings:        []string{"交付物与任务目标一致", "内容结构完整且可追踪"},
 			Recommendations: []string{"进入审批阶段前补充一次最终人工复核"},
+			TemplateKey:     templateKey,
+			PassThreshold:   passThreshold,
+			TotalScore:      80,
 		}},
 	}, nil
 }

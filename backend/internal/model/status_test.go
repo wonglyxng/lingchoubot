@@ -69,6 +69,7 @@ func TestTaskStatusTransitions_Comprehensive(t *testing.T) {
 		{TaskStatusPendingApproval, TaskStatusCompleted},
 		{TaskStatusPendingApproval, TaskStatusRevisionRequired},
 		{TaskStatusPendingApproval, TaskStatusFailed},
+		{TaskStatusRevisionRequired, TaskStatusAssigned},
 		{TaskStatusRevisionRequired, TaskStatusInProgress},
 		{TaskStatusRevisionRequired, TaskStatusCancelled},
 		{TaskStatusBlocked, TaskStatusInProgress},
