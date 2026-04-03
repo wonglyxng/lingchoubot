@@ -41,11 +41,24 @@ type PolicyOverride struct {
 	ScoreItems    []ScoreItem `json:"score_items,omitempty"`
 }
 
+type ExtraScoreItemsTrimTrace struct {
+	SelectionRule            string      `json:"selection_rule,omitempty"`
+	MaxExtraItems            int         `json:"max_extra_items,omitempty"`
+	RequestedExtraScoreItems []ScoreItem `json:"requested_extra_score_items,omitempty"`
+	KeptExtraScoreItems      []ScoreItem `json:"kept_extra_score_items,omitempty"`
+	DroppedExtraScoreItems   []ScoreItem `json:"dropped_extra_score_items,omitempty"`
+}
+
+type ResolutionTrace struct {
+	ExtraScoreItemsTrim *ExtraScoreItemsTrimTrace `json:"extra_score_items_trim,omitempty"`
+}
+
 // ResolvedPolicy is the final policy handed to runtime and persisted in metadata.
 type ResolvedPolicy struct {
-	TemplateKey   string      `json:"template_key"`
-	TaskCategory  string      `json:"task_category"`
-	PassThreshold int         `json:"pass_threshold"`
-	HardGates     []HardGate  `json:"hard_gates"`
-	ScoreItems    []ScoreItem `json:"score_items"`
+	TemplateKey     string           `json:"template_key"`
+	TaskCategory    string           `json:"task_category"`
+	PassThreshold   int              `json:"pass_threshold"`
+	HardGates       []HardGate       `json:"hard_gates"`
+	ScoreItems      []ScoreItem      `json:"score_items"`
+	ResolutionTrace *ResolutionTrace `json:"resolution_trace,omitempty"`
 }

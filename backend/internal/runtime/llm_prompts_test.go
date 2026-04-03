@@ -115,6 +115,20 @@ func TestReviewerPrompt_ContainsScorecardSchema(t *testing.T) {
 	}
 }
 
+func TestSupervisorPrompt_ContainsReviewPolicyOverrideRules(t *testing.T) {
+	prompt := buildSystemPrompt("supervisor", "")
+	required := []string{
+		"review_policy 表示默认模板上的 override",
+		"新增 score_items 最多 2 个",
+		"按 weight 降序、key 升序保留前 2 个，并记录裁剪痕迹",
+	}
+	for _, item := range required {
+		if !containsPromptText(prompt, item) {
+			t.Fatalf("supervisor prompt missing %s", item)
+		}
+	}
+}
+
 func validEvalOutputForSample(sample EvalSample) *AgentTaskOutput {
 	switch sample.Role {
 	case "pm":

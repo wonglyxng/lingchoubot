@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/lingchou/lingchoubot/backend/internal/model"
+	"github.com/lingchou/lingchoubot/backend/internal/reviewpolicy"
+	"github.com/lingchou/lingchoubot/backend/internal/runtime"
 )
 
 func TestInferSpecialization(t *testing.T) {
@@ -253,5 +255,82 @@ func TestTaskChainInputSortOffset(t *testing.T) {
 	}
 	if input.SortOffset != 5 {
 		t.Errorf("expected sort_offset 5, got %d", input.SortOffset)
+	}
+}
+
+func TestBuildContractMetadata_PersistsTrimTraceForExtraScoreItems(t *testing.T) {
+	task := &model.Task{Title: "技术可行性评估与架构设计", Description: "输出架构设计"}
+	action := runtime.ContractAction{
+		TaskTitle:         task.Title,
+		TaskCategory:      "architecture",
+		ReviewTemplateKey: "architecture_v1",
+		ReviewPolicy: map[string]any{
+			"score_items": []map[string]any{
+				{
+					"key":    "technical_feasibility",
+					"name":   "技术可行性",
+					"weight": 20,
+				},
+				{
+					"key":    "tradeoff_reasoning",
+					"name":   "取舍说明",
+					"weight": 15,
+				},
+				{
+					"key":    "constraint_alignment",
+					"name":   "约束一致性",
+					"weight": 10,
+				},
+				{
+					"key":    "implementation_guidance",
+					"name":   "实施指导性",
+					"weight": 20,
+				},
+				{
+					"key":    "risk_control",
+					"name":   "风险控制",
+					"weight": 15,
+				},
+				{
+					"key":    "extra_b",
+					"name":   "业务一致性",
+					"weight": 10,
+				},
+				{
+					"key":    "extra_c",
+					"name":   "团队协作性",
+					"weight": 1,
+				},
+				{
+					"key":    "extra_a",
+					"name":   "方案落地收益",
+					"weight": 10,
+				},
+			},
+		},
+	}
+
+	metadata, err := buildContractMetadata(task, action)
+	if err != nil {
+		t.Fatalf("buildContractMetadata: %v", err)
+	}
+
+	policy, ok := metadata["review_policy"].(*reviewpolicy.ResolvedPolicy)
+	if !ok {
+		t.Fatalf("metadata[review_policy] type = %T, want *reviewpolicy.ResolvedPolicy", metadata["review_policy"])
+	}
+	if policy.ResolutionTrace == nil || policy.ResolutionTrace.ExtraScoreItemsTrim == nil {
+		t.Fatal("expected resolution trace in review policy")
+	}
+	trace := policy.ResolutionTrace.ExtraScoreItemsTrim
+	if len(trace.DroppedExtraScoreItems) != 1 || trace.DroppedExtraScoreItems[0].Key != "extra_c" {
+		t.Fatalf("dropped extra score items = %#v, want [extra_c]", trace.DroppedExtraScoreItems)
+	}
+	if trace.KeptExtraScoreItems[0].Key != "extra_a" || trace.KeptExtraScoreItems[1].Key != "extra_b" {
+		t.Fatalf("kept extra score items = %#v, want extra_a then extra_b", trace.KeptExtraScoreItems)
+	}
+
+	if _, ok := metadata["review_policy_override"]; !ok {
+		t.Fatal("expected review_policy_override metadata to preserve original override")
 	}
 }

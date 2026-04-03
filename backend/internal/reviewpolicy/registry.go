@@ -3,6 +3,7 @@ package reviewpolicy
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 )
 
 var defaultTemplates = map[string]Template{
@@ -167,11 +168,12 @@ func ResolvePolicy(taskCategory string, override map[string]any) (*ResolvedPolic
 	}
 
 	if len(parsed.ScoreItems) > 0 {
-		items, err := mergeScoreItems(template.ScoreItems, parsed.ScoreItems, template.OverridePolicy)
+		items, trace, err := mergeScoreItems(template.ScoreItems, parsed.ScoreItems, template.OverridePolicy)
 		if err != nil {
 			return nil, err
 		}
 		resolved.ScoreItems = items
+		resolved.ResolutionTrace = mergeResolutionTrace(resolved.ResolutionTrace, trace)
 	}
 
 	if err := validateResolvedPolicy(resolved); err != nil {
@@ -192,39 +194,57 @@ func parseOverride(raw map[string]any) (*PolicyOverride, error) {
 	return &override, nil
 }
 
-func mergeScoreItems(defaults, overrides []ScoreItem, policy OverridePolicy) ([]ScoreItem, error) {
+func mergeScoreItems(defaults, overrides []ScoreItem, policy OverridePolicy) ([]ScoreItem, *ResolutionTrace, error) {
 	items := cloneScoreItems(defaults)
 	indexByKey := make(map[string]int, len(items))
 	for i, item := range items {
 		indexByKey[item.Key] = i
 	}
 
-	extraCount := 0
+	extraItems := make([]ScoreItem, 0)
 	for _, item := range overrides {
 		if item.Key == "" {
-			return nil, fmt.Errorf("score item key is required")
+			return nil, nil, fmt.Errorf("score item key is required")
 		}
 		if item.Name == "" {
-			return nil, fmt.Errorf("score item %q name is required", item.Key)
+			return nil, nil, fmt.Errorf("score item %q name is required", item.Key)
 		}
 		if item.Weight <= 0 {
-			return nil, fmt.Errorf("score item %q weight must be positive", item.Key)
+			return nil, nil, fmt.Errorf("score item %q weight must be positive", item.Key)
 		}
 		if idx, ok := indexByKey[item.Key]; ok {
 			if !policy.AllowWeightAdjustment {
-				return nil, fmt.Errorf("score item %q cannot be adjusted", item.Key)
+				return nil, nil, fmt.Errorf("score item %q cannot be adjusted", item.Key)
 			}
 			items[idx] = item
 			continue
 		}
-		extraCount++
-		if extraCount > policy.MaxExtraItems {
-			return nil, fmt.Errorf("extra score items exceed max %d", policy.MaxExtraItems)
+		extraItems = append(extraItems, item)
+	}
+
+	sort.Slice(extraItems, func(i, j int) bool {
+		if extraItems[i].Weight != extraItems[j].Weight {
+			return extraItems[i].Weight > extraItems[j].Weight
 		}
+		if extraItems[i].Key != extraItems[j].Key {
+			return extraItems[i].Key < extraItems[j].Key
+		}
+		return extraItems[i].Name < extraItems[j].Name
+	})
+
+	keptExtraItems := cloneScoreItems(extraItems)
+	droppedExtraItems := []ScoreItem(nil)
+	if len(extraItems) > policy.MaxExtraItems {
+		keptExtraItems = cloneScoreItems(extraItems[:policy.MaxExtraItems])
+		droppedExtraItems = cloneScoreItems(extraItems[policy.MaxExtraItems:])
+	}
+
+	for _, item := range keptExtraItems {
 		items = append(items, item)
 		indexByKey[item.Key] = len(items) - 1
 	}
-	return items, nil
+
+	return items, buildResolutionTrace(policy, extraItems, keptExtraItems, droppedExtraItems), nil
 }
 
 func validateResolvedPolicy(policy *ResolvedPolicy) error {
@@ -281,4 +301,32 @@ func cloneScoreItems(items []ScoreItem) []ScoreItem {
 	out := make([]ScoreItem, len(items))
 	copy(out, items)
 	return out
+}
+
+func buildResolutionTrace(policy OverridePolicy, requestedExtraItems, keptExtraItems, droppedExtraItems []ScoreItem) *ResolutionTrace {
+	if len(droppedExtraItems) == 0 {
+		return nil
+	}
+	return &ResolutionTrace{
+		ExtraScoreItemsTrim: &ExtraScoreItemsTrimTrace{
+			SelectionRule:            "weight_desc_key_asc",
+			MaxExtraItems:            policy.MaxExtraItems,
+			RequestedExtraScoreItems: cloneScoreItems(requestedExtraItems),
+			KeptExtraScoreItems:      cloneScoreItems(keptExtraItems),
+			DroppedExtraScoreItems:   cloneScoreItems(droppedExtraItems),
+		},
+	}
+}
+
+func mergeResolutionTrace(current, next *ResolutionTrace) *ResolutionTrace {
+	if current == nil {
+		return next
+	}
+	if next == nil {
+		return current
+	}
+	if next.ExtraScoreItemsTrim != nil {
+		current.ExtraScoreItemsTrim = next.ExtraScoreItemsTrim
+	}
+	return current
 }
