@@ -173,6 +173,29 @@ func TestValidateOutput_Reviewer_MissingReviews(t *testing.T) {
 	}
 }
 
+func TestValidateOutput_Reviewer_MultipleReviews(t *testing.T) {
+	output := &AgentTaskOutput{
+		Status:  OutputStatusSuccess,
+		Summary: "评审完成",
+		Reviews: []ReviewAction{
+			{
+				Verdict:         "approved",
+				Findings:        []string{"good structure", "content is relevant"},
+				Recommendations: []string{"keep adding focused evidence"},
+			},
+			{
+				Verdict:         "needs_revision",
+				Findings:        []string{"scope drift", "missing acceptance criteria"},
+				Recommendations: []string{"merge into one task-level conclusion"},
+			},
+		},
+	}
+	err := ValidateOutput("reviewer", "", output)
+	if err == nil {
+		t.Fatal("expected validation error for multiple reviews")
+	}
+}
+
 func TestValidateOutput_NilOutput(t *testing.T) {
 	err := ValidateOutput("pm", "", nil)
 	if err == nil {

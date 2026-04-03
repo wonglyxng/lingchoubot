@@ -17,9 +17,9 @@ import (
 // ArtifactStorageTool uploads artifact content to MinIO object storage.
 // Initialization or runtime failures are surfaced explicitly to the caller.
 type ArtifactStorageTool struct {
-	client *minio.Client
-	bucket string
-	logger *slog.Logger
+	client  *minio.Client
+	bucket  string
+	logger  *slog.Logger
 	initErr error
 }
 

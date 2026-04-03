@@ -454,10 +454,14 @@ func TestIntegration_ReworkPath(t *testing.T) {
 		t.Errorf("reviews = %d, want 4", reviewCount)
 	}
 
-	// Each executed task should have 2 artifacts (1 per worker execution)
+	// Each executed task should keep 1 artifact and append a new version on rework.
 	artCount := f.ArtifactRepo.CountByProject(proj.ID)
-	if artCount != 4 {
-		t.Errorf("artifacts = %d, want 4", artCount)
+	if artCount != 2 {
+		t.Errorf("artifacts = %d, want 2", artCount)
+	}
+	verCount := f.ArtifactVersionRepo.TotalCount()
+	if verCount != 4 {
+		t.Errorf("artifact versions = %d, want 4", verCount)
 	}
 
 	// Verify reviewer was called the expected number of times
@@ -590,7 +594,7 @@ func TestIntegration_ArtifactVersioning(t *testing.T) {
 	ctx := context.Background()
 	f := testutil.NewFixture()
 
-	// Use rework reviewer so each task gets 2 worker executions → 2 artifacts + 2 versions each
+	// Use rework reviewer so each task gets 2 worker executions → 1 artifact with 2 versions.
 	reviewer := newReworkReviewer()
 	f.Registry.Register("reviewer", reviewer)
 
@@ -610,12 +614,25 @@ func TestIntegration_ArtifactVersioning(t *testing.T) {
 	artCount := f.ArtifactRepo.CountByProject(proj.ID)
 	verCount := f.ArtifactVersionRepo.TotalCount()
 
-	// First phase has 2 tasks; each task runs worker twice = 4 artifacts, 4 versions
-	if artCount != 4 {
-		t.Errorf("artifacts = %d, want 4", artCount)
+	// First phase has 2 tasks; each task runs worker twice = 2 artifacts, 4 versions.
+	if artCount != 2 {
+		t.Errorf("artifacts = %d, want 2", artCount)
 	}
 	if verCount != 4 {
 		t.Errorf("artifact versions = %d, want 4", verCount)
+	}
+	artifacts, _, err := f.ArtifactSvc.List(ctx, repository.ArtifactListParams{ProjectID: proj.ID, Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("list artifacts: %v", err)
+	}
+	for _, artifact := range artifacts {
+		versions, err := f.ArtifactSvc.ListVersions(ctx, artifact.ID)
+		if err != nil {
+			t.Fatalf("list artifact versions: %v", err)
+		}
+		if len(versions) != 2 {
+			t.Errorf("artifact %q versions = %d, want 2", artifact.Name, len(versions))
+		}
 	}
 }
 

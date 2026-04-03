@@ -102,6 +102,16 @@ export interface ApprovalRequest {
   updated_at: string;
 }
 
+export interface ApprovalDecisionResult {
+  id: string;
+  status: string;
+  task_status?: string;
+  workflow_run_id?: string;
+  workflow_resume_status: string;
+  workflow_resume_message?: string;
+  warnings?: string[];
+}
+
 export interface AuditLog {
   id: string;
   actor_type: string;

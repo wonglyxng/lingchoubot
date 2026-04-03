@@ -166,8 +166,8 @@ func validateWorkerOutput(o *AgentTaskOutput) []string {
 
 func validateReviewerOutput(o *AgentTaskOutput) []string {
 	var f []string
-	if len(o.Reviews) == 0 {
-		f = append(f, "Reviewer output must contain at least 1 review")
+	if len(o.Reviews) != 1 {
+		f = append(f, fmt.Sprintf("Reviewer output must contain exactly 1 review, got %d", len(o.Reviews)))
 	}
 	for i, r := range o.Reviews {
 		if r.Verdict == "" {

@@ -75,16 +75,22 @@ func (h *ApprovalRequestHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *ApprovalRequestHandler) Decide(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var body struct {
-		Status model.ApprovalStatus `json:"status"`
-		Note   string               `json:"note"`
+		Status       model.ApprovalStatus `json:"status"`
+		Note         string               `json:"note"`
+		DecisionNote string               `json:"decision_note"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		middleware.ErrorJSON(w, http.StatusBadRequest, "INVALID_BODY", "请求体解析失败")
 		return
 	}
-	if err := h.svc.Decide(r.Context(), id, body.Status, body.Note); err != nil {
+	note := body.Note
+	if note == "" {
+		note = body.DecisionNote
+	}
+	result, err := h.svc.Decide(r.Context(), id, body.Status, note)
+	if err != nil {
 		middleware.ErrorJSON(w, http.StatusBadRequest, "DECIDE_FAILED", err.Error())
 		return
 	}
-	middleware.JSON(w, http.StatusOK, map[string]string{"id": id, "status": string(body.Status)})
+	middleware.JSON(w, http.StatusOK, result)
 }

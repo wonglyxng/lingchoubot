@@ -9,8 +9,10 @@ import (
 // It is no longer registered in the production gateway.
 type TestRunnerTool struct{}
 
-func (t *TestRunnerTool) Name() string        { return "test_runner" }
-func (t *TestRunnerTool) Description() string  { return "已停用：不再返回模拟测试结果，请改用真实测试执行链路" }
+func (t *TestRunnerTool) Name() string { return "test_runner" }
+func (t *TestRunnerTool) Description() string {
+	return "已停用：不再返回模拟测试结果，请改用真实测试执行链路"
+}
 func (t *TestRunnerTool) RequiredPermissions() []string { return []string{"tool.test_runner"} }
 
 func (t *TestRunnerTool) Execute(ctx context.Context, input map[string]any) (*ToolResult, error) {

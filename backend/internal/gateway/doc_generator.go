@@ -10,8 +10,10 @@ import (
 // It is no longer registered in the production gateway.
 type DocGeneratorTool struct{}
 
-func (t *DocGeneratorTool) Name() string        { return "doc_generator" }
-func (t *DocGeneratorTool) Description() string  { return "已停用：不再生成占位文档，请改用真实 LLM Agent 产出工件" }
+func (t *DocGeneratorTool) Name() string { return "doc_generator" }
+func (t *DocGeneratorTool) Description() string {
+	return "已停用：不再生成占位文档，请改用真实 LLM Agent 产出工件"
+}
 func (t *DocGeneratorTool) RequiredPermissions() []string { return []string{"tool.doc_generator"} }
 
 func (t *DocGeneratorTool) Execute(ctx context.Context, input map[string]any) (*ToolResult, error) {

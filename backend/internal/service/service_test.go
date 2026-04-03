@@ -559,8 +559,18 @@ func TestApprovalRequestServiceDecideTransitionsTask(t *testing.T) {
 			taskSvc := &TaskService{repo: taskRepo, audit: auditSvc}
 			svc := &ApprovalRequestService{repo: approvalRepo, taskSvc: taskSvc, audit: auditSvc}
 
-			if err := svc.Decide(ctx, "approval-1", tt.decision, "ok"); err != nil {
+			result, err := svc.Decide(ctx, "approval-1", tt.decision, "ok")
+			if err != nil {
 				t.Fatalf("Decide returned error: %v", err)
+			}
+			if result == nil {
+				t.Fatal("expected decision result, got nil")
+			}
+			if result.Status != tt.decision {
+				t.Fatalf("expected decision result status %q, got %q", tt.decision, result.Status)
+			}
+			if result.TaskStatus == nil || *result.TaskStatus != tt.wantStatus {
+				t.Fatalf("expected decision result task status %q, got %+v", tt.wantStatus, result.TaskStatus)
 			}
 
 			if approvalRepo.decideCalls != 1 {
@@ -618,8 +628,12 @@ func TestApprovalRequestServiceDecideResumesWorkflowWhenPhaseUnlocked(t *testing
 	taskSvc := &TaskService{repo: taskRepo, audit: auditSvc}
 	svc := &ApprovalRequestService{repo: approvalRepo, taskSvc: taskSvc, audit: auditSvc, resumer: resumer}
 
-	if err := svc.Decide(ctx, "approval-1", model.ApprovalStatusApproved, "ok"); err != nil {
+	result, err := svc.Decide(ctx, "approval-1", model.ApprovalStatusApproved, "ok")
+	if err != nil {
 		t.Fatalf("Decide returned error: %v", err)
+	}
+	if result.WorkflowResumeStatus != model.WorkflowResumeStatusResumed {
+		t.Fatalf("expected resumed workflow status, got %q", result.WorkflowResumeStatus)
 	}
 	if resumer.resumeCalls != 1 {
 		t.Fatalf("expected 1 resume call, got %d", resumer.resumeCalls)
@@ -670,11 +684,81 @@ func TestApprovalRequestServiceDecideDoesNotResumeWhilePhaseStillPending(t *test
 	taskSvc := &TaskService{repo: taskRepo, audit: auditSvc}
 	svc := &ApprovalRequestService{repo: approvalRepo, taskSvc: taskSvc, audit: auditSvc, resumer: resumer}
 
-	if err := svc.Decide(ctx, "approval-1", model.ApprovalStatusApproved, "ok"); err != nil {
+	result, err := svc.Decide(ctx, "approval-1", model.ApprovalStatusApproved, "ok")
+	if err != nil {
 		t.Fatalf("Decide returned error: %v", err)
+	}
+	if result.WorkflowResumeStatus != model.WorkflowResumeStatusSkipped {
+		t.Fatalf("expected skipped workflow resume, got %q", result.WorkflowResumeStatus)
 	}
 	if resumer.resumeCalls != 0 {
 		t.Fatalf("expected 0 resume calls, got %d", resumer.resumeCalls)
+	}
+}
+
+func TestApprovalRequestServiceDecideReturnsWarningWhenResumeFailsAfterSuccess(t *testing.T) {
+	ctx := context.Background()
+	auditSvc, auditRepo := newTestAuditService()
+	phaseID := "phase-1"
+	taskID := "task-1"
+	taskRepo := &fakeTaskRepo{
+		tasks: map[string]*model.Task{
+			taskID: {
+				ID:        taskID,
+				Title:     "需求文档编写",
+				Status:    model.TaskStatusPendingApproval,
+				ProjectID: "proj-1",
+				PhaseID:   &phaseID,
+			},
+		},
+	}
+	approvalRepo := &fakeApprovalRepo{
+		approvals: map[string]*model.ApprovalRequest{
+			"approval-1": {
+				ID:          "approval-1",
+				ProjectID:   "proj-1",
+				TaskID:      &taskID,
+				RequestedBy: "reviewer-1",
+				Title:       "审批需求文档",
+				Status:      model.ApprovalStatusPending,
+				Metadata:    model.JSON(`{"run_id":"run-1"}`),
+			},
+		},
+	}
+	resumer := &fakeWorkflowResumer{err: fmt.Errorf("run run-1 is not resumable (status=failed)")}
+	taskSvc := &TaskService{repo: taskRepo, audit: auditSvc}
+	svc := &ApprovalRequestService{repo: approvalRepo, taskSvc: taskSvc, audit: auditSvc, resumer: resumer}
+
+	result, err := svc.Decide(ctx, "approval-1", model.ApprovalStatusApproved, "ok")
+	if err != nil {
+		t.Fatalf("Decide returned unexpected error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected decision result, got nil")
+	}
+	if result.WorkflowResumeStatus != model.WorkflowResumeStatusWarning {
+		t.Fatalf("expected warning workflow resume status, got %q", result.WorkflowResumeStatus)
+	}
+	if len(result.Warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d", len(result.Warnings))
+	}
+	if result.WorkflowRunID != "run-1" {
+		t.Fatalf("expected workflow run id run-1, got %q", result.WorkflowRunID)
+	}
+	if approvalRepo.approvals["approval-1"].Status != model.ApprovalStatusApproved {
+		t.Fatalf("expected approval status approved, got %q", approvalRepo.approvals["approval-1"].Status)
+	}
+	if taskRepo.tasks[taskID].Status != model.TaskStatusCompleted {
+		t.Fatalf("expected task status completed, got %q", taskRepo.tasks[taskID].Status)
+	}
+	if resumer.resumeCalls != 1 {
+		t.Fatalf("expected 1 resume call, got %d", resumer.resumeCalls)
+	}
+	if len(auditRepo.entries) != 3 {
+		t.Fatalf("expected 3 audit entries, got %d", len(auditRepo.entries))
+	}
+	if auditRepo.entries[2].EventType != "approval_request.continuation_warning" {
+		t.Fatalf("expected continuation warning audit event, got %q", auditRepo.entries[2].EventType)
 	}
 }
 

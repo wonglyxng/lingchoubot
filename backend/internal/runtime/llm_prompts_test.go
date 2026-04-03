@@ -103,8 +103,8 @@ func validEvalOutputForSample(sample EvalSample) *AgentTaskOutput {
 		return &AgentTaskOutput{
 			Status:  OutputStatusSuccess,
 			Summary: "项目已拆解",
-			Phases: []PhaseAction{{Name: "需求分析", Description: "梳理需求", SortOrder: 1}},
-			Tasks: []TaskAction{{PhaseName: "需求分析", Title: "需求梳理", Description: "整理需求", Priority: 3}},
+			Phases:  []PhaseAction{{Name: "需求分析", Description: "梳理需求", SortOrder: 1}},
+			Tasks:   []TaskAction{{PhaseName: "需求分析", Title: "需求梳理", Description: "整理需求", Priority: 3}},
 		}
 	case "supervisor":
 		return &AgentTaskOutput{

@@ -20,6 +20,11 @@ type ApprovalRequestService struct {
 	resumer WorkflowResumer
 }
 
+type approvalContinuationWarning struct {
+	message string
+	runID   string
+}
+
 func NewApprovalRequestService(repo ApprovalRepository, taskSvc *TaskService, audit *AuditService) *ApprovalRequestService {
 	return &ApprovalRequestService{repo: repo, taskSvc: taskSvc, audit: audit}
 }
@@ -67,24 +72,30 @@ func (s *ApprovalRequestService) List(ctx context.Context, p repository.Approval
 // Decide approves or rejects a pending approval request.
 // If approved and linked to a task in pending_approval, advances it to completed.
 // If rejected and linked to a task in pending_approval, moves it to revision_required.
-func (s *ApprovalRequestService) Decide(ctx context.Context, id string, status model.ApprovalStatus, note string) error {
+func (s *ApprovalRequestService) Decide(ctx context.Context, id string, status model.ApprovalStatus, note string) (*model.ApprovalDecisionResult, error) {
 	if status != model.ApprovalStatusApproved && status != model.ApprovalStatusRejected {
-		return fmt.Errorf("decision must be 'approved' or 'rejected'")
+		return nil, fmt.Errorf("decision must be 'approved' or 'rejected'")
 	}
 
 	old, err := s.repo.GetByID(ctx, id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if old == nil {
-		return fmt.Errorf("approval request not found")
+		return nil, fmt.Errorf("approval request not found")
 	}
 	if old.Status != model.ApprovalStatusPending {
-		return fmt.Errorf("approval already decided")
+		return nil, fmt.Errorf("approval already decided")
 	}
 
 	if err := s.repo.Decide(ctx, id, status, note); err != nil {
-		return err
+		return nil, err
+	}
+
+	result := &model.ApprovalDecisionResult{
+		ID:                   id,
+		Status:               status,
+		WorkflowResumeStatus: model.WorkflowResumeStatusNotRequested,
 	}
 
 	s.audit.LogEvent(ctx, "user", "", "approval_request.decided",
@@ -95,28 +106,43 @@ func (s *ApprovalRequestService) Decide(ctx context.Context, id string, status m
 	)
 
 	if old.TaskID != nil {
+		var targetStatus model.TaskStatus
 		switch status {
 		case model.ApprovalStatusApproved:
-			_ = s.taskSvc.TransitionStatus(ctx, *old.TaskID, model.TaskStatusCompleted)
+			targetStatus = model.TaskStatusCompleted
 		case model.ApprovalStatusRejected:
-			_ = s.taskSvc.TransitionStatus(ctx, *old.TaskID, model.TaskStatusRevisionRequired)
+			targetStatus = model.TaskStatusRevisionRequired
 		}
-		if err := s.resumeWorkflowIfPhaseUnlocked(ctx, old); err != nil {
-			return err
+		if targetStatus != "" {
+			if err := s.taskSvc.TransitionStatus(ctx, *old.TaskID, targetStatus); err != nil {
+				warning := fmt.Sprintf("审批已生效，但关联任务状态未更新：%s", err.Error())
+				result.Warnings = append(result.Warnings, warning)
+				result.WorkflowResumeStatus = model.WorkflowResumeStatusWarning
+				result.WorkflowResumeMessage = "任务状态未更新，已跳过工作流恢复"
+				s.auditContinuationWarning(ctx, old.ID, "", warning)
+				return result, nil
+			}
+			result.TaskStatus = &targetStatus
+		}
+		if warning := s.resumeWorkflowIfPhaseUnlocked(ctx, old, result); warning != nil {
+			result.Warnings = append(result.Warnings, warning.message)
+			s.auditContinuationWarning(ctx, old.ID, warning.runID, warning.message)
 		}
 	}
 
-	return nil
+	return result, nil
 }
 
-func (s *ApprovalRequestService) resumeWorkflowIfPhaseUnlocked(ctx context.Context, approval *model.ApprovalRequest) error {
+func (s *ApprovalRequestService) resumeWorkflowIfPhaseUnlocked(ctx context.Context, approval *model.ApprovalRequest, result *model.ApprovalDecisionResult) *approvalContinuationWarning {
 	if s.resumer == nil || approval == nil || approval.TaskID == nil {
 		return nil
 	}
 
 	task, err := s.taskSvc.GetByID(ctx, *approval.TaskID)
 	if err != nil {
-		return fmt.Errorf("load task for approval continuation: %w", err)
+		result.WorkflowResumeStatus = model.WorkflowResumeStatusWarning
+		result.WorkflowResumeMessage = "读取任务阶段上下文失败，未恢复工作流"
+		return &approvalContinuationWarning{message: fmt.Sprintf("审批已生效，但读取任务阶段上下文失败：%s", err.Error())}
 	}
 	if task == nil || task.PhaseID == nil {
 		return nil
@@ -128,26 +154,49 @@ func (s *ApprovalRequestService) resumeWorkflowIfPhaseUnlocked(ctx context.Conte
 		Offset:  0,
 	})
 	if err != nil {
-		return fmt.Errorf("list phase tasks for approval continuation: %w", err)
+		result.WorkflowResumeStatus = model.WorkflowResumeStatusWarning
+		result.WorkflowResumeMessage = "读取阶段任务失败，未恢复工作流"
+		return &approvalContinuationWarning{message: fmt.Sprintf("审批已生效，但读取阶段任务失败：%s", err.Error())}
 	}
 	for _, phaseTask := range tasks {
 		if phaseTask.Status == model.TaskStatusPendingApproval {
+			result.WorkflowResumeStatus = model.WorkflowResumeStatusSkipped
+			result.WorkflowResumeMessage = "当前阶段仍有待审批任务，暂不恢复工作流"
 			return nil
 		}
 	}
 
 	runID, err := approvalRunID(approval.Metadata)
 	if err != nil {
-		return fmt.Errorf("parse approval metadata: %w", err)
+		result.WorkflowResumeStatus = model.WorkflowResumeStatusWarning
+		result.WorkflowResumeMessage = "审批元数据异常，未恢复工作流"
+		return &approvalContinuationWarning{message: fmt.Sprintf("审批已生效，但解析工作流标识失败：%s", err.Error())}
 	}
 	if runID == "" {
+		result.WorkflowResumeStatus = model.WorkflowResumeStatusSkipped
+		result.WorkflowResumeMessage = "审批未绑定工作流运行，无需恢复"
 		return nil
 	}
+	result.WorkflowRunID = runID
 
 	if err := s.resumer.ResumeRun(ctx, runID); err != nil {
-		return fmt.Errorf("resume workflow run %s: %w", runID, err)
+		result.WorkflowResumeStatus = model.WorkflowResumeStatusWarning
+		result.WorkflowResumeMessage = "审批已生效，但工作流未恢复"
+		return &approvalContinuationWarning{runID: runID, message: fmt.Sprintf("审批已生效，但工作流 %s 未恢复：%s", runID, err.Error())}
 	}
+	result.WorkflowResumeStatus = model.WorkflowResumeStatusResumed
+	result.WorkflowResumeMessage = "审批收口后已恢复工作流"
 	return nil
+}
+
+func (s *ApprovalRequestService) auditContinuationWarning(ctx context.Context, approvalID, runID, message string) {
+	after := map[string]string{"message": message}
+	if runID != "" {
+		after["run_id"] = runID
+	}
+	s.audit.LogEvent(ctx, "system", "", "approval_request.continuation_warning",
+		message,
+		"approval_request", approvalID, nil, after)
 }
 
 func approvalRunID(raw model.JSON) (string, error) {

@@ -64,15 +64,15 @@ func TestRegistryGetForSpec(t *testing.T) {
 func TestRegistrySpecializedRunnerOutput(t *testing.T) {
 	reg := NewRegistry()
 	reg.RegisterSpecialized("worker", "backend", &registryTestRunner{role: "worker", spec: "backend", output: &AgentTaskOutput{
-		Status: OutputStatusNeedsReview,
+		Status:    OutputStatusNeedsReview,
 		Artifacts: []ArtifactAction{{ArtifactType: "source_code", ContentType: "text/x-go", Content: "package main"}},
 	}})
 	reg.RegisterSpecialized("worker", "frontend", &registryTestRunner{role: "worker", spec: "frontend", output: &AgentTaskOutput{
-		Status: OutputStatusNeedsReview,
+		Status:    OutputStatusNeedsReview,
 		Artifacts: []ArtifactAction{{ArtifactType: "source_code", ContentType: "text/typescript", Content: "export default function Demo() {}"}},
 	}})
 	reg.RegisterSpecialized("worker", "qa", &registryTestRunner{role: "worker", spec: "qa", output: &AgentTaskOutput{
-		Status: OutputStatusNeedsReview,
+		Status:    OutputStatusNeedsReview,
 		Artifacts: []ArtifactAction{{ArtifactType: "test_report", ContentType: "text/markdown", Content: "# QA"}},
 	}})
 

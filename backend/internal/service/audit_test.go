@@ -39,10 +39,10 @@ func TestAuditServicePublishEvent_NormalizesWorkflowTargetID(t *testing.T) {
 
 	afterState := model.JSON(`{"run_id":"run-123","phase_id":"phase-1"}`)
 	entry := &model.AuditLog{
-		ID:        "evt-1",
-		EventType: "workflow.waiting_manual_intervention",
+		ID:         "evt-1",
+		EventType:  "workflow.waiting_manual_intervention",
 		TargetType: "project",
-		TargetID:  "project-456",
+		TargetID:   "project-456",
 		AfterState: &afterState,
 	}
 

@@ -832,6 +832,28 @@ func (e *Engine) processAssignmentActions(ctx context.Context, task *model.Task,
 func (e *Engine) processArtifactActions(ctx context.Context, projectID, taskID, agentID string, actions []runtime.ArtifactAction) error {
 	for _, a := range actions {
 		metaBytes, _ := json.Marshal(a.Metadata)
+		existing, err := e.findReusableArtifact(ctx, taskID, a)
+		if err != nil {
+			return fmt.Errorf("find reusable artifact %s: %w", a.Name, err)
+		}
+		if existing != nil {
+			version := &model.ArtifactVersion{
+				ArtifactID:    existing.ID,
+				URI:           a.URI,
+				ContentType:   a.ContentType,
+				SizeBytes:     a.SizeBytes,
+				ChangeSummary: "返工迭代版本（Agent 重新生成）",
+				CreatedBy:     &agentID,
+				Metadata:      model.JSON(metaBytes),
+				Content:       a.Content,
+				SourceName:    a.Name,
+			}
+			if err := e.services.Artifact.AddVersion(ctx, version); err != nil {
+				return fmt.Errorf("add artifact version %s: %w", a.Name, err)
+			}
+			continue
+		}
+
 		artifact := &model.Artifact{
 			ProjectID:    projectID,
 			TaskID:       &taskID,
@@ -855,6 +877,24 @@ func (e *Engine) processArtifactActions(ctx context.Context, projectID, taskID, 
 		}
 	}
 	return nil
+}
+
+func (e *Engine) findReusableArtifact(ctx context.Context, taskID string, action runtime.ArtifactAction) (*model.Artifact, error) {
+	artifacts, _, err := e.services.Artifact.List(ctx, repository.ArtifactListParams{
+		TaskID:       taskID,
+		ArtifactType: action.ArtifactType,
+		Limit:        100,
+		Offset:       0,
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, artifact := range artifacts {
+		if artifact.Name == action.Name && string(artifact.ArtifactType) == action.ArtifactType {
+			return artifact, nil
+		}
+	}
+	return nil, nil
 }
 
 func (e *Engine) processHandoffActions(ctx context.Context, taskID, agentID string, actions []runtime.HandoffAction) error {
@@ -881,6 +921,9 @@ func (e *Engine) processHandoffActions(ctx context.Context, taskID, agentID stri
 }
 
 func (e *Engine) processReviewActions(ctx context.Context, runID, taskID, reviewerID string, artifactCtxs []runtime.ArtifactCtx, actions []runtime.ReviewAction) error {
+	if len(actions) != 1 {
+		return fmt.Errorf("reviewer must output exactly 1 review action, got %d", len(actions))
+	}
 	for _, a := range actions {
 		findings, _ := json.Marshal(a.Findings)
 		recommendations, _ := json.Marshal(a.Recommendations)

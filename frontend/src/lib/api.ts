@@ -1,6 +1,6 @@
 import type {
   Project, Phase, Agent, Task, Artifact, ArtifactVersion,
-  ApprovalRequest, AuditLog, WorkflowRun, ListResponse,
+  ApprovalDecisionResult, ApprovalRequest, AuditLog, WorkflowRun, ListResponse,
   ReviewReport, TaskContract, TaskAssignment, HandoffSnapshot, ToolCall,
   LLMProvider, LLMModel,
 } from "./types";
@@ -222,7 +222,7 @@ export const api = {
     get: (id: string) => get<ApprovalRequest>(`/api/v1/approvals/${id}`),
     create: (data: Partial<ApprovalRequest>) => post<ApprovalRequest>("/api/v1/approvals", data),
     decide: (id: string, status: "approved" | "rejected", note: string) =>
-      post<ApprovalRequest>(`/api/v1/approvals/${id}/decide`, { status, decision_note: note }),
+      post<ApprovalDecisionResult>(`/api/v1/approvals/${id}/decide`, { status, decision_note: note }),
   },
 
   audit: {
