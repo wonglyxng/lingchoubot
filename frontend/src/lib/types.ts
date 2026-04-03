@@ -140,6 +140,60 @@ export interface ReviewReport {
   created_at: string;
 }
 
+export interface ReviewHardGateResult {
+  key: string;
+  passed: boolean;
+  reason: string;
+}
+
+export interface ReviewScoreItemResult {
+  key: string;
+  name: string;
+  weight: number;
+  score: number;
+  max_score: number;
+  reason?: string;
+}
+
+export interface ReviewReworkBrief {
+  attempt: number;
+  failed_hard_gate_keys: string[];
+  low_score_item_keys: string[];
+  must_fix_items: string[];
+  suggestions: string[];
+  requires_clarification: boolean;
+}
+
+export interface ReviewScorecardMetadata {
+  template_key?: string;
+  task_category?: string;
+  pass_threshold?: number;
+  total_score?: number;
+  hard_gate_results?: ReviewHardGateResult[];
+  score_items?: ReviewScoreItemResult[];
+  must_fix_items?: string[];
+  suggestions?: string[];
+  rework_brief?: ReviewReworkBrief;
+}
+
+export interface ApprovalScoreBreakdownItem {
+  key: string;
+  name: string;
+  weight: number;
+  score: number;
+  max_score: number;
+}
+
+export interface ApprovalScoreSummary {
+  template_key?: string;
+  pass_threshold?: number;
+  total_score?: number;
+  hard_gate_passed_count?: number;
+  hard_gate_total_count?: number;
+  score_breakdown_summary?: ApprovalScoreBreakdownItem[];
+  must_fix_items?: string[];
+}
+
 export interface TaskContract {
   id: string;
   task_id: string;

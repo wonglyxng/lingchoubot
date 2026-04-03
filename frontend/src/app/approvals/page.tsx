@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { ShieldCheck, Wifi, WifiOff } from "lucide-react";
 import { api } from "@/lib/api";
-import type { ApprovalRequest } from "@/lib/types";
+import type { ApprovalRequest, ApprovalScoreBreakdownItem, ApprovalScoreSummary } from "@/lib/types";
 import { StatusBadge } from "@/components/StatusBadge";
 import { asRecord, asStringArray, formatTime, getApprovalStatus, metadataNumber, relativeTime, truncateText } from "@/lib/utils";
 import { useEventStream } from "@/lib/useEventStream";
@@ -24,6 +24,16 @@ type ApprovalArtifact = {
   contentPreview: string;
 };
 
+type ApprovalScoreSummaryView = {
+  templateKey: string;
+  passThreshold?: number;
+  totalScore?: number;
+  hardGatePassedCount?: number;
+  hardGateTotalCount?: number;
+  scoreBreakdownSummary: ApprovalScoreBreakdownItem[];
+  mustFixItems: string[];
+};
+
 function getApprovalArtifacts(metadata: Record<string, unknown>): ApprovalArtifact[] {
   const rawArtifacts = metadata.artifacts;
   if (!Array.isArray(rawArtifacts)) {
@@ -41,6 +51,44 @@ function getApprovalArtifacts(metadata: Record<string, unknown>): ApprovalArtifa
       };
     })
     .filter((item) => item.name || item.versionUri);
+}
+
+function asNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function getApprovalScoreSummary(metadata: Record<string, unknown>): ApprovalScoreSummaryView | null {
+  const scoreMeta = metadata as ApprovalScoreSummary & Record<string, unknown>;
+  const templateKey = typeof scoreMeta.template_key === "string" ? scoreMeta.template_key : "";
+  const scoreBreakdownSummary = Array.isArray(scoreMeta.score_breakdown_summary)
+    ? scoreMeta.score_breakdown_summary
+        .map((item) => {
+          const record = asRecord(item);
+          return {
+            key: typeof record.key === "string" ? record.key : "",
+            name: typeof record.name === "string" ? record.name : "未命名评分项",
+            weight: asNumber(record.weight) ?? 0,
+            score: asNumber(record.score) ?? 0,
+            max_score: asNumber(record.max_score) ?? 0,
+          };
+        })
+        .filter((item) => item.key)
+    : [];
+  const mustFixItems = asStringArray(scoreMeta.must_fix_items);
+
+  if (!templateKey && scoreBreakdownSummary.length === 0 && mustFixItems.length === 0) {
+    return null;
+  }
+
+  return {
+    templateKey,
+    passThreshold: metadataNumber(scoreMeta, "pass_threshold") ?? undefined,
+    totalScore: metadataNumber(scoreMeta, "total_score") ?? undefined,
+    hardGatePassedCount: metadataNumber(scoreMeta, "hard_gate_passed_count") ?? undefined,
+    hardGateTotalCount: metadataNumber(scoreMeta, "hard_gate_total_count") ?? undefined,
+    scoreBreakdownSummary,
+    mustFixItems,
+  };
 }
 
 export default function ApprovalsPage() {
@@ -173,6 +221,7 @@ export default function ApprovalsPage() {
             const recommendations = asStringArray(metadata.recommendations);
             const artifacts = getApprovalArtifacts(metadata);
             const artifactCount = metadataNumber(metadata, "artifact_count") ?? artifacts.length;
+            const scoreSummary = getApprovalScoreSummary(metadata);
             return (
               <li
                 key={row.id}
@@ -199,6 +248,62 @@ export default function ApprovalsPage() {
 
                       {reviewSummary && (
                         <p className="mt-3 text-sm leading-6 text-gray-700">{reviewSummary}</p>
+                      )}
+
+                      {scoreSummary && (
+                        <div className="mt-3 rounded-lg border border-amber-200 bg-white p-3">
+                          <div className="grid gap-3 md:grid-cols-4">
+                            <div>
+                              <p className="text-xs font-medium uppercase tracking-wide text-amber-700">评分模板</p>
+                              <p className="mt-1 text-sm font-semibold text-gray-900">
+                                {scoreSummary.templateKey || "未记录"}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-xs font-medium uppercase tracking-wide text-amber-700">总分 / 阈值</p>
+                              <p className="mt-1 text-sm font-semibold text-gray-900">
+                                {scoreSummary.totalScore ?? "—"} / {scoreSummary.passThreshold ?? "—"}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-xs font-medium uppercase tracking-wide text-amber-700">硬门槛</p>
+                              <p className="mt-1 text-sm font-semibold text-gray-900">
+                                {typeof scoreSummary.hardGatePassedCount === "number" &&
+                                typeof scoreSummary.hardGateTotalCount === "number"
+                                  ? `${scoreSummary.hardGatePassedCount}/${scoreSummary.hardGateTotalCount} 通过`
+                                  : "未记录"}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-xs font-medium uppercase tracking-wide text-amber-700">主要分项</p>
+                              <p className="mt-1 text-sm font-semibold text-gray-900">
+                                {scoreSummary.scoreBreakdownSummary.length} 项
+                              </p>
+                            </div>
+                          </div>
+
+                          {scoreSummary.mustFixItems.length > 0 && (
+                            <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2">
+                              <p className="text-xs font-medium uppercase tracking-wide text-red-700">必改项</p>
+                              <p className="mt-2 text-sm text-red-800">{scoreSummary.mustFixItems.join("；")}</p>
+                            </div>
+                          )}
+
+                          {scoreSummary.scoreBreakdownSummary.length > 0 && (
+                            <div className="mt-3 grid gap-2 md:grid-cols-2">
+                              {scoreSummary.scoreBreakdownSummary.map((item) => (
+                                <div key={`${row.id}-score-${item.key}`} className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <p className="text-sm font-medium text-gray-900">{item.name}</p>
+                                    <span className="text-xs text-gray-500">
+                                      {item.score}/{item.max_score} · 权重 {item.weight}
+                                    </span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       )}
 
                       <div className="mt-3 grid gap-3 md:grid-cols-2">

@@ -3,7 +3,13 @@
 import { useEffect, useState, useCallback } from "react";
 import { FileSearch } from "lucide-react";
 import { api } from "@/lib/api";
-import type { ReviewReport } from "@/lib/types";
+import type {
+  ReviewHardGateResult,
+  ReviewReport,
+  ReviewReworkBrief,
+  ReviewScoreItemResult,
+  ReviewScorecardMetadata,
+} from "@/lib/types";
 import { StatusBadge } from "@/components/StatusBadge";
 import { asRecord, asStringArray, formatTime, metadataNumber, truncateText } from "@/lib/utils";
 
@@ -13,6 +19,18 @@ type ReviewArtifact = {
   artifactType: string;
   versionUri: string;
   contentPreview: string;
+};
+
+type ReviewScorecardView = {
+  templateKey: string;
+  taskCategory: string;
+  passThreshold?: number;
+  totalScore?: number;
+  hardGateResults: ReviewHardGateResult[];
+  scoreItems: ReviewScoreItemResult[];
+  mustFixItems: string[];
+  suggestions: string[];
+  reworkBrief?: ReviewReworkBrief;
 };
 
 function verdictBadge(verdict: string) {
@@ -47,6 +65,90 @@ function getReviewArtifacts(report: ReviewReport): ReviewArtifact[] {
       };
     })
     .filter((item) => item.artifactId || item.versionUri || item.name);
+}
+
+function asNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function parseHardGateResults(value: unknown): ReviewHardGateResult[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => {
+      const record = asRecord(item);
+      return {
+        key: typeof record.key === "string" ? record.key : "",
+        passed: record.passed === true,
+        reason: typeof record.reason === "string" ? record.reason : "",
+      };
+    })
+    .filter((item) => item.key);
+}
+
+function parseScoreItems(value: unknown): ReviewScoreItemResult[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => {
+      const record = asRecord(item);
+      return {
+        key: typeof record.key === "string" ? record.key : "",
+        name: typeof record.name === "string" ? record.name : "未命名评分项",
+        weight: asNumber(record.weight) ?? 0,
+        score: asNumber(record.score) ?? 0,
+        max_score: asNumber(record.max_score) ?? 0,
+        reason: typeof record.reason === "string" ? record.reason : "",
+      };
+    })
+    .filter((item) => item.key);
+}
+
+function getReviewScorecard(report: ReviewReport): ReviewScorecardView | null {
+  const metadata = asRecord(report.metadata) as ReviewScorecardMetadata & Record<string, unknown>;
+  const templateKey = typeof metadata.template_key === "string" ? metadata.template_key : "";
+  const taskCategory = typeof metadata.task_category === "string" ? metadata.task_category : "";
+  const hardGateResults = parseHardGateResults(metadata.hard_gate_results);
+  const scoreItems = parseScoreItems(metadata.score_items);
+  const mustFixItems = asStringArray(metadata.must_fix_items);
+  const suggestions = asStringArray(metadata.suggestions);
+  const reworkBriefRecord = asRecord(metadata.rework_brief);
+  const reworkBrief =
+    Object.keys(reworkBriefRecord).length > 0
+      ? {
+          attempt: metadataNumber(reworkBriefRecord, "attempt") ?? 0,
+          failed_hard_gate_keys: asStringArray(reworkBriefRecord.failed_hard_gate_keys),
+          low_score_item_keys: asStringArray(reworkBriefRecord.low_score_item_keys),
+          must_fix_items: asStringArray(reworkBriefRecord.must_fix_items),
+          suggestions: asStringArray(reworkBriefRecord.suggestions),
+          requires_clarification: reworkBriefRecord.requires_clarification === true,
+        }
+      : undefined;
+
+  if (
+    !templateKey &&
+    !taskCategory &&
+    hardGateResults.length === 0 &&
+    scoreItems.length === 0 &&
+    mustFixItems.length === 0 &&
+    !reworkBrief
+  ) {
+    return null;
+  }
+
+  return {
+    templateKey,
+    taskCategory,
+    passThreshold: metadataNumber(metadata, "pass_threshold") ?? undefined,
+    totalScore: metadataNumber(metadata, "total_score") ?? undefined,
+    hardGateResults,
+    scoreItems,
+    mustFixItems,
+    suggestions,
+    reworkBrief,
+  };
 }
 
 export default function ReviewsPage() {
@@ -106,6 +208,8 @@ export default function ReviewsPage() {
             const metadata = asRecord(r.metadata);
             const artifacts = getReviewArtifacts(r);
             const artifactCount = metadataNumber(metadata, "artifact_count") ?? artifacts.length;
+            const scorecard = getReviewScorecard(r);
+            const passedHardGateCount = scorecard?.hardGateResults.filter((item) => item.passed).length ?? 0;
 
             return (
               <li key={r.id} className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
@@ -134,6 +238,137 @@ export default function ReviewsPage() {
                     <p className="mt-1 font-medium text-gray-900">{artifactCount} 个</p>
                   </div>
                 </div>
+
+                {scorecard && (
+                  <section className="mt-4 rounded-lg border border-amber-200 bg-amber-50/40 p-4">
+                    <div className="grid gap-3 md:grid-cols-4">
+                      <div>
+                        <p className="text-xs uppercase tracking-wide text-amber-700">评分模板</p>
+                        <p className="mt-1 text-sm font-semibold text-gray-900">
+                          {scorecard.templateKey || "未记录"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-wide text-amber-700">总分 / 阈值</p>
+                        <p className="mt-1 text-sm font-semibold text-gray-900">
+                          {scorecard.totalScore ?? "—"} / {scorecard.passThreshold ?? "—"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-wide text-amber-700">硬门槛</p>
+                        <p className="mt-1 text-sm font-semibold text-gray-900">
+                          {scorecard.hardGateResults.length > 0
+                            ? `${passedHardGateCount}/${scorecard.hardGateResults.length} 通过`
+                            : "未记录"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-wide text-amber-700">任务类别</p>
+                        <p className="mt-1 text-sm font-semibold text-gray-900">
+                          {scorecard.taskCategory || "未记录"}
+                        </p>
+                      </div>
+                    </div>
+
+                    {scorecard.mustFixItems.length > 0 && (
+                      <div className="mt-4 rounded-lg border border-red-200 bg-white p-3">
+                        <p className="text-xs font-medium uppercase tracking-wide text-red-700">必改项</p>
+                        <ul className="mt-2 space-y-2 text-sm text-red-800">
+                          {scorecard.mustFixItems.map((item, index) => (
+                            <li key={`${r.id}-must-fix-${index}`} className="rounded-md bg-red-50 px-3 py-2">
+                              {item}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {scorecard.reworkBrief && (
+                      <div className="mt-4 rounded-lg border border-gray-200 bg-white p-3">
+                        <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500">
+                          <span>返工摘要</span>
+                          <span>第 {scorecard.reworkBrief.attempt} 次返工</span>
+                          {scorecard.reworkBrief.requires_clarification && <span>需要额外澄清</span>}
+                        </div>
+                        <div className="mt-3 grid gap-3 md:grid-cols-3">
+                          <div>
+                            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">失败硬门槛</p>
+                            <p className="mt-2 text-sm text-gray-700">
+                              {scorecard.reworkBrief.failed_hard_gate_keys.length > 0
+                                ? scorecard.reworkBrief.failed_hard_gate_keys.join("、")
+                                : "无"}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">主要失分项</p>
+                            <p className="mt-2 text-sm text-gray-700">
+                              {scorecard.reworkBrief.low_score_item_keys.length > 0
+                                ? scorecard.reworkBrief.low_score_item_keys.join("、")
+                                : "无"}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">建议项</p>
+                            <p className="mt-2 text-sm text-gray-700">
+                              {scorecard.reworkBrief.suggestions.length > 0
+                                ? scorecard.reworkBrief.suggestions.join("；")
+                                : "无"}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {scorecard.hardGateResults.length > 0 && (
+                      <div className="mt-4">
+                        <p className="text-sm font-semibold text-gray-900">硬门槛结果</p>
+                        <div className="mt-3 grid gap-3 md:grid-cols-2">
+                          {scorecard.hardGateResults.map((item) => (
+                            <div
+                              key={`${r.id}-hard-gate-${item.key}`}
+                              className={`rounded-lg border p-3 ${
+                                item.passed ? "border-green-200 bg-white" : "border-red-200 bg-white"
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <p className="text-sm font-medium text-gray-900">{item.key}</p>
+                                <span
+                                  className={`rounded-full px-2 py-0.5 text-xs ${
+                                    item.passed
+                                      ? "bg-green-50 text-green-700"
+                                      : "bg-red-50 text-red-700"
+                                  }`}
+                                >
+                                  {item.passed ? "通过" : "失败"}
+                                </span>
+                              </div>
+                              <p className="mt-2 text-sm text-gray-600">{item.reason || "未记录原因"}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {scorecard.scoreItems.length > 0 && (
+                      <div className="mt-4">
+                        <p className="text-sm font-semibold text-gray-900">分项得分</p>
+                        <div className="mt-3 grid gap-3 md:grid-cols-2">
+                          {scorecard.scoreItems.map((item) => (
+                            <div key={`${r.id}-score-item-${item.key}`} className="rounded-lg border border-gray-200 bg-white p-3">
+                              <div className="flex items-center justify-between gap-3">
+                                <p className="text-sm font-medium text-gray-900">{item.name}</p>
+                                <span className="text-xs text-gray-500">
+                                  {item.score}/{item.max_score} · 权重 {item.weight}
+                                </span>
+                              </div>
+                              <p className="mt-2 text-sm text-gray-600">{item.reason || "未记录评分理由"}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </section>
+                )}
 
                 <div className="mt-4 grid gap-4 md:grid-cols-2">
                   <section className="rounded-lg border border-gray-200 p-4">
