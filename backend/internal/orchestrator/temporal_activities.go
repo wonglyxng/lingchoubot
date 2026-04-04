@@ -51,7 +51,7 @@ func (st *stepTracker) setAgent(id string) { st.step.AgentID = &id }
 func (st *stepTracker) setTask(id string)  { st.step.TaskID = &id }
 func (st *stepTracker) setPhase(id string) { st.step.PhaseID = &id }
 
-func (a *Activities) waitForManualIntervention(ctx context.Context, runID string, proj *model.Project, agentRole, phaseID, taskID, taskTitle, reason string) error {
+func (a *Activities) waitForManualIntervention(ctx context.Context, runID string, proj *model.Project, reasonCode model.ManualInterventionReasonCode, agentRole, phaseID, taskID, taskTitle, reason string) error {
 	run, err := a.Workflow.GetRun(ctx, runID)
 	if err != nil {
 		return fmt.Errorf("get run for manual intervention: %w", err)
@@ -65,14 +65,35 @@ func (a *Activities) waitForManualIntervention(ctx context.Context, runID string
 		projectName = proj.Name
 		projectID = proj.ID
 	}
+	intervention := &model.WorkflowManualIntervention{
+		ReasonCode: reasonCode,
+		Reason:     reason,
+		AgentRole:  agentRole,
+		PhaseID:    phaseID,
+		TaskID:     taskID,
+		TaskTitle:  taskTitle,
+		AvailableActions: []model.ManualInterventionAction{
+			model.ManualInterventionActionResume,
+			model.ManualInterventionActionCancelRun,
+		},
+	}
+	if reasonCode == model.ManualInterventionReasonReworkLimitReached {
+		intervention.AvailableActions = append([]model.ManualInterventionAction{model.ManualInterventionActionEscalateToApproval}, intervention.AvailableActions...)
+	}
 	summary := fmt.Sprintf("项目「%s」因 LLM 执行失败等待人工介入", projectName)
-	if taskTitle != "" {
+	if reasonCode == model.ManualInterventionReasonReworkLimitReached {
+		if taskTitle != "" {
+			summary = fmt.Sprintf("项目「%s」任务「%s」返工次数已达上限，等待人工处理", projectName, taskTitle)
+		} else {
+			summary = fmt.Sprintf("项目「%s」返工次数已达上限，等待人工处理", projectName)
+		}
+	} else if taskTitle != "" {
 		summary = fmt.Sprintf("项目「%s」任务「%s」因 %s 执行失败等待人工介入", projectName, taskTitle, agentRole)
 	}
-	if err := a.Workflow.WaitForManualIntervention(ctx, run, summary, reason); err != nil {
+	if err := a.Workflow.WaitForManualIntervention(ctx, run, summary, reason, intervention); err != nil {
 		return fmt.Errorf("mark run waiting manual intervention: %w", err)
 	}
-	after := map[string]string{"run_id": runID, "agent_role": agentRole, "error": reason}
+	after := map[string]string{"run_id": runID, "agent_role": agentRole, "error": reason, "reason_code": string(reasonCode)}
 	if phaseID != "" {
 		after["phase_id"] = phaseID
 	}
@@ -134,7 +155,7 @@ func (a *Activities) ActivityPM(ctx context.Context, input ProjectWorkflowInput)
 	}
 	if output.Status == runtime.OutputStatusFailed {
 		st.fail(ctx, output.Error)
-		if waitErr := a.waitForManualIntervention(ctx, input.RunID, proj, "pm", "", "", "", output.Error); waitErr != nil {
+		if waitErr := a.waitForManualIntervention(ctx, input.RunID, proj, model.ManualInterventionReasonLLMExecutionFailed, "pm", "", "", "", output.Error); waitErr != nil {
 			return nil, waitErr
 		}
 		return nil, temporalManualInterventionError(output.Error)
@@ -285,7 +306,7 @@ func (a *Activities) ActivitySupervisor(ctx context.Context, input TaskChainInpu
 	}
 	if output.Status == runtime.OutputStatusFailed {
 		st.fail(ctx, output.Error)
-		if waitErr := a.waitForManualIntervention(ctx, input.RunID, proj, "supervisor", input.PhaseID, task.ID, task.Title, output.Error); waitErr != nil {
+		if waitErr := a.waitForManualIntervention(ctx, input.RunID, proj, model.ManualInterventionReasonLLMExecutionFailed, "supervisor", input.PhaseID, task.ID, task.Title, output.Error); waitErr != nil {
 			return nil, waitErr
 		}
 		return nil, temporalManualInterventionError(output.Error)
@@ -376,7 +397,7 @@ func (a *Activities) ActivityWorker(ctx context.Context, input TaskChainInput) (
 	}
 	if output.Status == runtime.OutputStatusFailed {
 		st.fail(ctx, output.Error)
-		if waitErr := a.waitForManualIntervention(ctx, input.RunID, proj, "worker", input.PhaseID, task.ID, task.Title, output.Error); waitErr != nil {
+		if waitErr := a.waitForManualIntervention(ctx, input.RunID, proj, model.ManualInterventionReasonLLMExecutionFailed, "worker", input.PhaseID, task.ID, task.Title, output.Error); waitErr != nil {
 			return nil, waitErr
 		}
 		return nil, temporalManualInterventionError(output.Error)
@@ -475,7 +496,7 @@ func (a *Activities) ActivityReviewer(ctx context.Context, input TaskChainInput)
 	}
 	if output.Status == runtime.OutputStatusFailed {
 		st.fail(ctx, output.Error)
-		if waitErr := a.waitForManualIntervention(ctx, input.RunID, proj, "reviewer", input.PhaseID, task.ID, task.Title, output.Error); waitErr != nil {
+		if waitErr := a.waitForManualIntervention(ctx, input.RunID, proj, model.ManualInterventionReasonLLMExecutionFailed, "reviewer", input.PhaseID, task.ID, task.Title, output.Error); waitErr != nil {
 			return nil, waitErr
 		}
 		return nil, temporalManualInterventionError(output.Error)
@@ -549,7 +570,7 @@ func (a *Activities) ActivityCheckRework(ctx context.Context, input CheckReworkI
 			return false, fmt.Errorf("project %s not found", input.ProjectID)
 		}
 		reason := fmt.Sprintf("任务「%s」超过最大返工次数（%d），需要人工介入", task.Title, maxReworkAttempts)
-		if waitErr := a.waitForManualIntervention(ctx, input.RunID, proj, "supervisor", input.PhaseID, task.ID, task.Title, reason); waitErr != nil {
+		if waitErr := a.waitForManualIntervention(ctx, input.RunID, proj, model.ManualInterventionReasonReworkLimitReached, "supervisor", input.PhaseID, task.ID, task.Title, reason); waitErr != nil {
 			return false, waitErr
 		}
 		return false, temporalManualInterventionError(reason)

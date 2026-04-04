@@ -244,6 +244,8 @@ export const api = {
     get: (id: string) => get<WorkflowRun>(`/api/v1/orchestrator/runs/${id}`),
     start: (projectId: string) => post<WorkflowRun>("/api/v1/orchestrator/runs", { project_id: projectId }),
     resume: (id: string) => post<{ status: string }>(`/api/v1/orchestrator/runs/${id}/resume`, {}),
+    resolveManualIntervention: (id: string, data: { action: string; note?: string }) =>
+      post<{ status: string }>(`/api/v1/orchestrator/runs/${id}/manual-intervention`, data),
   },
 
   llmProviders: {

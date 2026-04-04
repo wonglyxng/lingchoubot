@@ -80,6 +80,52 @@ function stepStatusVariant(status: string) {
   }
 }
 
+type ManualInterventionInfo = {
+  reasonCode: string;
+  reason: string;
+  agentRole?: string;
+  taskId?: string;
+  taskTitle?: string;
+  availableActions: string[];
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === "string" && item.length > 0);
+}
+
+function getManualIntervention(run: WorkflowRun): ManualInterventionInfo | null {
+  const metadata = asRecord(run.metadata);
+  if (!metadata) {
+    return null;
+  }
+  const intervention = asRecord(metadata.manual_intervention);
+  if (!intervention) {
+    return null;
+  }
+  const reasonCode = typeof intervention.reason_code === "string" ? intervention.reason_code : "";
+  if (!reasonCode) {
+    return null;
+  }
+  return {
+    reasonCode,
+    reason: typeof intervention.reason === "string" ? intervention.reason : run.error,
+    agentRole: typeof intervention.agent_role === "string" ? intervention.agent_role : undefined,
+    taskId: typeof intervention.task_id === "string" ? intervention.task_id : undefined,
+    taskTitle: typeof intervention.task_title === "string" ? intervention.task_title : undefined,
+    availableActions: asStringArray(intervention.available_actions),
+  };
+}
+
 function StepRow({ step }: { step: WorkflowStep }) {
   const v = stepStatusVariant(step.status);
   const durationMs = step.started_at && step.completed_at
@@ -126,11 +172,16 @@ function RunCard({
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
   const [loadingSteps, setLoadingSteps] = useState(false);
   const [resuming, setResuming] = useState(false);
+  const [manualActing, setManualActing] = useState(false);
+  const [manualNote, setManualNote] = useState("");
   const st = getWorkflowStatus(run.status);
   const isRunning = run.status === "running" || run.status === "pending";
   const shouldPoll = !liveUpdatesEnabled && isRunning;
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const canResume = run.status === "waiting_manual_intervention" || run.status === "waiting_approval";
+  const manualIntervention = useMemo(() => getManualIntervention(run), [run]);
+  const canEscalateToApproval = run.status === "waiting_manual_intervention"
+    && manualIntervention?.availableActions.includes("escalate_to_approval");
 
   useEffect(() => {
     const nextSteps = Array.isArray(run.steps) ? run.steps : [];
@@ -152,6 +203,24 @@ function RunCard({
       alert(e instanceof Error ? e.message : "恢复执行失败");
     } finally {
       setResuming(false);
+    }
+  };
+
+  const handleEscalateToApproval = async () => {
+    setManualActing(true);
+    try {
+      await api.workflows.resolveManualIntervention(run.id, {
+        action: "escalate_to_approval",
+        note: manualNote.trim(),
+      });
+      const updated = await api.workflows.get(run.id);
+      onRunUpdated?.(updated);
+      setSteps(Array.isArray(updated.steps) ? updated.steps : []);
+      setManualNote("");
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : "人工放行失败");
+    } finally {
+      setManualActing(false);
     }
   };
 
@@ -242,7 +311,7 @@ function RunCard({
           <button
             type="button"
             onClick={handleResume}
-            disabled={resuming}
+            disabled={resuming || manualActing}
             className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Play className="h-3.5 w-3.5" />
@@ -287,15 +356,56 @@ function RunCard({
             </div>
           )}
           {run.status === "waiting_manual_intervention" && (
-            <div className="mt-2 rounded border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-800">
-              <div className="flex items-start gap-2">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
-                <div>
-                  <div className="font-medium">当前运行因真实 LLM 调用失败而暂停，等待人工介入。</div>
-                  <div className="mt-1 text-red-700">修复供应商配置、模型权限或上下文问题后，可点击“恢复执行”继续。</div>
+            manualIntervention?.reasonCode === "rework_limit_reached" ? (
+              <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-900">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium">当前运行因任务返工次数达到上限而暂停，等待人工处理。</div>
+                    <div className="mt-1 text-amber-800">
+                      {manualIntervention.taskTitle
+                        ? `阻塞任务：${manualIntervention.taskTitle}。`
+                        : "当前阻塞任务已达到最大返工次数。"} 这不是供应商故障；直接恢复执行只会重跑当前链路，不会修改当前评审结论。
+                    </div>
+                    {canEscalateToApproval && (
+                      <div className="mt-3 space-y-2">
+                        <textarea
+                          value={manualNote}
+                          onChange={(e) => setManualNote(e.target.value)}
+                          placeholder="可选：填写人工放行说明，写入审批上下文与审计日志"
+                          rows={3}
+                          className="w-full rounded-md border border-amber-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none ring-0 placeholder:text-gray-400 focus:border-amber-400"
+                        />
+                        <div className="flex flex-wrap items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={handleEscalateToApproval}
+                            disabled={manualActing || resuming}
+                            className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <Play className="h-3.5 w-3.5" />
+                            {manualActing ? "处理中..." : "人工放行到审批"}
+                          </button>
+                          <span className="text-xs text-amber-800">
+                            会把当前任务送入审批关口，并继续推进工作流。
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
+            ) : (
+              <div className="mt-2 rounded border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-800">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+                  <div>
+                    <div className="font-medium">当前运行因 LLM 执行失败而暂停，等待人工介入。</div>
+                    <div className="mt-1 text-red-700">修复供应商配置、模型权限或上下文问题后，可点击“恢复执行”继续。</div>
+                  </div>
+                </div>
+              </div>
+            )
           )}
         </div>
       )}

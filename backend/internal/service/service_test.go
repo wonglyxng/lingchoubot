@@ -1135,7 +1135,17 @@ func TestWorkflowServiceRunLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRun manual run returned error: %v", err)
 	}
-	if err := svc.WaitForManualIntervention(ctx, runManual, "manual waiting", "llm failed"); err != nil {
+	manual := &model.WorkflowManualIntervention{
+		ReasonCode: model.ManualInterventionReasonLLMExecutionFailed,
+		AgentRole:  "worker",
+		TaskID:     "task-1",
+		TaskTitle:  "示例任务",
+		AvailableActions: []model.ManualInterventionAction{
+			model.ManualInterventionActionResume,
+			model.ManualInterventionActionCancelRun,
+		},
+	}
+	if err := svc.WaitForManualIntervention(ctx, runManual, "manual waiting", "llm failed", manual); err != nil {
 		t.Fatalf("WaitForManualIntervention returned error: %v", err)
 	}
 	if runRepo.lastUpdatedRun == nil || runRepo.lastUpdatedRun.Status != model.WorkflowRunWaitingManual {
@@ -1143,6 +1153,21 @@ func TestWorkflowServiceRunLifecycle(t *testing.T) {
 	}
 	if runRepo.lastUpdatedRun.Error != "llm failed" {
 		t.Fatalf("expected run error %q, got %q", "llm failed", runRepo.lastUpdatedRun.Error)
+	}
+	var manualMeta struct {
+		ManualIntervention struct {
+			ReasonCode string `json:"reason_code"`
+			TaskID     string `json:"task_id"`
+		} `json:"manual_intervention"`
+	}
+	if err := json.Unmarshal(runRepo.lastUpdatedRun.Metadata, &manualMeta); err != nil {
+		t.Fatalf("unmarshal run metadata: %v", err)
+	}
+	if manualMeta.ManualIntervention.ReasonCode != string(model.ManualInterventionReasonLLMExecutionFailed) {
+		t.Fatalf("manual intervention reason_code = %q, want %q", manualMeta.ManualIntervention.ReasonCode, model.ManualInterventionReasonLLMExecutionFailed)
+	}
+	if manualMeta.ManualIntervention.TaskID != "task-1" {
+		t.Fatalf("manual intervention task_id = %q, want %q", manualMeta.ManualIntervention.TaskID, "task-1")
 	}
 
 	run3, err := svc.CreateRun(ctx, "proj-3")
@@ -1160,6 +1185,15 @@ func TestWorkflowServiceRunLifecycle(t *testing.T) {
 	}
 	if runRepo.lastUpdatedRun == nil || runRepo.lastUpdatedRun.Status != model.WorkflowRunRunning {
 		t.Fatalf("expected updated run status %q, got %#v", model.WorkflowRunRunning, runRepo.lastUpdatedRun)
+	}
+	var resumedMeta struct {
+		ManualIntervention map[string]any `json:"manual_intervention"`
+	}
+	if err := json.Unmarshal(runRepo.lastUpdatedRun.Metadata, &resumedMeta); err != nil {
+		t.Fatalf("unmarshal resumed run metadata: %v", err)
+	}
+	if len(resumedMeta.ManualIntervention) != 0 {
+		t.Fatalf("expected manual_intervention metadata cleared after resume, got %#v", resumedMeta.ManualIntervention)
 	}
 }
 

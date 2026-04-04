@@ -26,6 +26,7 @@ func TestWorkflowRunRepo_Create(t *testing.T) {
 		Status:    model.WorkflowRunRunning,
 		Summary:   "initial",
 		Error:     "",
+		Metadata:  model.JSON(`{"source":"test"}`),
 		StartedAt: now,
 	}
 
@@ -33,7 +34,7 @@ func TestWorkflowRunRepo_Create(t *testing.T) {
 		AddRow("run-uuid", now, now)
 
 	mock.ExpectQuery(`INSERT INTO workflow_run`).
-		WithArgs(run.ProjectID, run.Status, run.Summary, run.Error, run.StartedAt).
+		WithArgs(run.ProjectID, run.Status, run.Summary, run.Error, run.Metadata, run.StartedAt).
 		WillReturnRows(rows)
 
 	if err := repo.Create(context.Background(), run); err != nil {
@@ -58,9 +59,9 @@ func TestWorkflowRunRepo_GetByID(t *testing.T) {
 	now := time.Now().Truncate(time.Microsecond)
 
 	rows := sqlmock.NewRows([]string{
-		"id", "project_id", "status", "summary", "error",
+		"id", "project_id", "status", "summary", "error", "metadata",
 		"started_at", "completed_at", "created_at", "updated_at",
-	}).AddRow("run-1", "proj-1", "running", "test", "", now, nil, now, now)
+	}).AddRow("run-1", "proj-1", "running", "test", "", `{"source":"test"}`, now, nil, now, now)
 
 	mock.ExpectQuery(`SELECT .+ FROM workflow_run WHERE id = \$1`).
 		WithArgs("run-1").
@@ -94,7 +95,7 @@ func TestWorkflowRunRepo_GetByID_NotFound(t *testing.T) {
 	repo := NewWorkflowRunRepo(db)
 
 	rows := sqlmock.NewRows([]string{
-		"id", "project_id", "status", "summary", "error",
+		"id", "project_id", "status", "summary", "error", "metadata",
 		"started_at", "completed_at", "created_at", "updated_at",
 	})
 
@@ -129,11 +130,12 @@ func TestWorkflowRunRepo_UpdateStatus(t *testing.T) {
 		Status:      model.WorkflowRunCompleted,
 		Summary:     "done",
 		Error:       "",
+		Metadata:    model.JSON(`{"source":"test"}`),
 		CompletedAt: &now,
 	}
 
 	mock.ExpectExec(`UPDATE workflow_run`).
-		WithArgs(run.ID, run.Status, run.Summary, run.Error, run.CompletedAt).
+		WithArgs(run.ID, run.Status, run.Summary, run.Error, run.Metadata, run.CompletedAt).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := repo.UpdateStatus(context.Background(), run); err != nil {
@@ -154,13 +156,14 @@ func TestWorkflowRunRepo_UpdateStatus_NotFound(t *testing.T) {
 	repo := NewWorkflowRunRepo(db)
 
 	run := &model.WorkflowRun{
-		ID:     "nonexistent",
-		Status: model.WorkflowRunFailed,
-		Error:  "boom",
+		ID:       "nonexistent",
+		Status:   model.WorkflowRunFailed,
+		Error:    "boom",
+		Metadata: model.JSON(`{}`),
 	}
 
 	mock.ExpectExec(`UPDATE workflow_run`).
-		WithArgs(run.ID, run.Status, run.Summary, run.Error, run.CompletedAt).
+		WithArgs(run.ID, run.Status, run.Summary, run.Error, run.Metadata, run.CompletedAt).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	if err := repo.UpdateStatus(context.Background(), run); err == nil {
@@ -188,11 +191,11 @@ func TestWorkflowRunRepo_List(t *testing.T) {
 
 	// list query
 	listRows := sqlmock.NewRows([]string{
-		"id", "project_id", "status", "summary", "error",
+		"id", "project_id", "status", "summary", "error", "metadata",
 		"started_at", "completed_at", "created_at", "updated_at",
 	}).
-		AddRow("run-1", "proj-1", "completed", "s1", "", now, &now, now, now).
-		AddRow("run-2", "proj-1", "running", "s2", "", now, nil, now, now)
+		AddRow("run-1", "proj-1", "completed", "s1", "", `{}`, now, &now, now, now).
+		AddRow("run-2", "proj-1", "running", "s2", "", `{}`, now, nil, now, now)
 
 	mock.ExpectQuery(`SELECT .+ FROM workflow_run`).
 		WithArgs("proj-1", 10, 0).
@@ -232,9 +235,9 @@ func TestWorkflowRunRepo_ListWithStatusFilter(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 
 	listRows := sqlmock.NewRows([]string{
-		"id", "project_id", "status", "summary", "error",
+		"id", "project_id", "status", "summary", "error", "metadata",
 		"started_at", "completed_at", "created_at", "updated_at",
-	}).AddRow("run-2", "proj-1", "running", "s2", "", now, nil, now, now)
+	}).AddRow("run-2", "proj-1", "running", "s2", "", `{}`, now, nil, now, now)
 
 	mock.ExpectQuery(`SELECT .+ FROM workflow_run`).
 		WithArgs("proj-1", "running", 10, 0).

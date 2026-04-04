@@ -119,6 +119,7 @@ func TestSupervisorPrompt_ContainsReviewPolicyOverrideRules(t *testing.T) {
 	prompt := buildSystemPrompt("supervisor", "")
 	required := []string{
 		"默认情况下不要输出 review_policy",
+		"不要输出 review_template_key",
 		"只有任务存在明确专项要求时，才输出 review_policy",
 		"必须同时输出 review_policy_reason 和 review_policy_source",
 		"review_policy_reason 必须明确说明",
@@ -129,6 +130,22 @@ func TestSupervisorPrompt_ContainsReviewPolicyOverrideRules(t *testing.T) {
 	for _, item := range required {
 		if !containsPromptText(prompt, item) {
 			t.Fatalf("supervisor prompt missing %s", item)
+		}
+	}
+}
+
+func TestPMPrompt_ContainsProjectBindingRules(t *testing.T) {
+	prompt := buildSystemPrompt("pm", "")
+	required := []string{
+		"任务描述都要体现该项目的真实目标",
+		"不要替换成其他业务域",
+		"如果项目是计算器",
+		"如果项目明确写了“仅前端”",
+		"不要输出后端 API",
+	}
+	for _, item := range required {
+		if !containsPromptText(prompt, item) {
+			t.Fatalf("pm prompt missing %s", item)
 		}
 	}
 }

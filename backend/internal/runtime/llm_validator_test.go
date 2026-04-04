@@ -60,6 +60,127 @@ func TestValidateOutput_PM_EmptyPhaseName(t *testing.T) {
 	}
 }
 
+func TestValidateOutputForInput_PM_RejectsProjectGoalDrift(t *testing.T) {
+	input := &AgentTaskInput{
+		Project: &ProjectCtx{
+			Name:        "Web四则运算计算器（仅前端）",
+			Description: "开发一个简易的 Web 四则运算计算器，支持加减乘除、清空与连续输入，不包含 CMS、后台管理或内容发布能力。",
+		},
+	}
+	output := &AgentTaskOutput{
+		Status:  OutputStatusSuccess,
+		Summary: "已拆解项目",
+		Phases: []PhaseAction{
+			{Name: "需求分析", Description: "梳理宠物领养平台的业务需求", SortOrder: 1},
+		},
+		Tasks: []TaskAction{
+			{PhaseName: "需求分析", Title: "需求梳理与PRD文档编写", Description: "分析宠物领养平台的领养申请、内容管理和 CMS 配置需求", Priority: 5},
+		},
+	}
+
+	if err := ValidateOutputForInput("pm", "", input, output); err == nil {
+		t.Fatal("expected PM validation failure for project goal drift")
+	}
+}
+
+func TestValidateOutputForInput_PM_AllowsBindingViaPhaseContext(t *testing.T) {
+	input := &AgentTaskInput{
+		Project: &ProjectCtx{
+			Name:        "简易前端计算器调试项目",
+			Description: "开发一个简易 Web 四则运算计算器，支持加减乘除、连续输入和结果显示。",
+		},
+	}
+	output := &AgentTaskOutput{
+		Status:  OutputStatusSuccess,
+		Summary: "将简易前端计算器调试项目分解为3个阶段和6个任务",
+		Phases: []PhaseAction{
+			{Name: "需求分析与技术规划", Description: "明确计算器功能需求，评估技术实现方案，制定开发计划", SortOrder: 1},
+		},
+		Tasks: []TaskAction{
+			{PhaseName: "需求分析与技术规划", Title: "需求梳理与PRD编写", Description: "梳理用户需求、交互流程与验收标准，输出产品需求文档", Priority: 5},
+		},
+	}
+
+	if err := ValidateOutputForInput("pm", "", input, output); err != nil {
+		t.Fatalf("expected PM task to inherit project binding from phase context, got: %v", err)
+	}
+}
+
+func TestValidateOutputForInput_PM_RejectsExplicitOutOfScopeTasks(t *testing.T) {
+	input := &AgentTaskInput{
+		Project: &ProjectCtx{
+			Name:        "Web四则运算计算器（仅前端）",
+			Description: "开发一个简易 Web 四则运算计算器，支持加减乘除、清空与连续输入，不包含后端 API、CMS、后台管理或内容发布能力。",
+		},
+	}
+	output := &AgentTaskOutput{
+		Status:  OutputStatusSuccess,
+		Summary: "将前端计算器项目拆解为需求、前端开发、后端 API 和 CMS 配置任务",
+		Phases: []PhaseAction{
+			{Name: "前端开发与联调", Description: "实现页面、并接入后端 API 与管理后台", SortOrder: 1},
+		},
+		Tasks: []TaskAction{
+			{PhaseName: "前端开发与联调", Title: "计算器前端页面开发", Description: "实现计算器页面与交互逻辑", Priority: 5},
+			{PhaseName: "前端开发与联调", Title: "计算器后端API开发", Description: "开发计算表达式接口并提供数据持久化", Priority: 4},
+			{PhaseName: "前端开发与联调", Title: "CMS配置与后台管理页面", Description: "配置内容管理系统并实现管理后台", Priority: 3},
+		},
+	}
+
+	err := ValidateOutputForInput("pm", "", input, output)
+	if err == nil {
+		t.Fatal("expected PM validation failure for explicit out-of-scope tasks")
+	}
+}
+
+func TestValidateOutputForInput_PM_AllowsFrontendOnlyPlanWithinScope(t *testing.T) {
+	input := &AgentTaskInput{
+		Project: &ProjectCtx{
+			Name:        "Web四则运算计算器（仅前端）",
+			Description: "开发一个简易 Web 四则运算计算器，支持加减乘除、清空与连续输入，不包含后端 API、CMS、后台管理或内容发布能力。",
+		},
+	}
+	output := &AgentTaskOutput{
+		Status:  OutputStatusSuccess,
+		Summary: "将前端计算器项目拆解为需求分析、前端实现和测试验证任务",
+		Phases: []PhaseAction{
+			{Name: "前端开发与验证", Description: "实现页面、交互逻辑并完成前端验证", SortOrder: 1},
+		},
+		Tasks: []TaskAction{
+			{PhaseName: "前端开发与验证", Title: "计算器前端页面开发", Description: "实现计算器按钮、显示区和响应式布局", Priority: 5},
+			{PhaseName: "前端开发与验证", Title: "计算器交互逻辑实现", Description: "实现加减乘除、连续输入、清空重置和结果显示", Priority: 5},
+			{PhaseName: "前端开发与验证", Title: "计算器前端功能测试", Description: "验证交互流程、边界输入和显示结果", Priority: 4},
+		},
+	}
+
+	if err := ValidateOutputForInput("pm", "", input, output); err != nil {
+		t.Fatalf("expected frontend-only plan to stay within scope, got: %v", err)
+	}
+}
+
+func TestValidateOutputForInput_PM_AllowsRestatingExplicitNonGoals(t *testing.T) {
+	input := &AgentTaskInput{
+		Project: &ProjectCtx{
+			Name:        "Web四则运算计算器（仅前端）",
+			Description: "开发一个简易 Web 四则运算计算器，支持加减乘除、清空与连续输入，不包含后端 API、CMS、后台管理或内容发布能力。",
+		},
+	}
+	output := &AgentTaskOutput{
+		Status:  OutputStatusSuccess,
+		Summary: "本项目仅包含前端计算器功能，不涉及后端 API、CMS 或后台管理。",
+		Phases: []PhaseAction{
+			{Name: "前端开发与验证", Description: "围绕前端页面和交互逻辑实现，不接入后端 API", SortOrder: 1},
+		},
+		Tasks: []TaskAction{
+			{PhaseName: "前端开发与验证", Title: "计算器前端页面开发", Description: "实现计算器按钮、显示区和响应式布局", Priority: 5},
+			{PhaseName: "前端开发与验证", Title: "计算器交互逻辑实现", Description: "实现加减乘除、连续输入、清空重置和结果显示", Priority: 5},
+		},
+	}
+
+	if err := ValidateOutputForInput("pm", "", input, output); err != nil {
+		t.Fatalf("expected explicit non-goal restatement to pass validation, got: %v", err)
+	}
+}
+
 func TestValidateOutput_Supervisor_Valid(t *testing.T) {
 	output := &AgentTaskOutput{
 		Status:  OutputStatusSuccess,
@@ -291,6 +412,60 @@ func TestValidateOutputForInput_AnalysisTaskWithValidationLanguageAllowsPRD(t *t
 	}
 	if err := ValidateOutputForInput("worker", "qa", input, output); err != nil {
 		t.Fatalf("expected analysis-style PRD task to pass validation, got: %v", err)
+	}
+}
+
+func TestValidateOutputForInput_Worker_AllowsKeywordLevelProjectBinding(t *testing.T) {
+	input := &AgentTaskInput{
+		Project: &ProjectCtx{
+			Name:        "前端四则运算计算器验证项目",
+			Description: "实现简易四则运算计算器页面，支持加减乘除、连续输入和清空重置。",
+		},
+		Task: &TaskCtx{
+			Title:       "需求梳理与PRD文档编写",
+			Description: "分析前端四则运算计算器的交互需求和页面行为，输出 PRD 文档。",
+		},
+	}
+	output := &AgentTaskOutput{
+		Status:  OutputStatusNeedsReview,
+		Summary: "已输出需求文档",
+		Artifacts: []ArtifactAction{{
+			Name:         "calculator-prd.md",
+			ArtifactType: "prd",
+			ContentType:  "text/markdown",
+			Content:      "# 四则运算计算器需求文档\n\n目标：明确加减乘除、连续输入、清空重置和结果显示的页面交互规则。",
+		}},
+	}
+
+	if err := ValidateOutputForInput("worker", "general", input, output); err != nil {
+		t.Fatalf("expected keyword-level binding to pass validation, got: %v", err)
+	}
+}
+
+func TestValidateOutputForInput_Worker_RejectsUnrelatedProjectContent(t *testing.T) {
+	input := &AgentTaskInput{
+		Project: &ProjectCtx{
+			Name:        "前端四则运算计算器验证项目",
+			Description: "实现简易四则运算计算器页面，支持加减乘除、连续输入和清空重置。",
+		},
+		Task: &TaskCtx{
+			Title:       "需求梳理与PRD文档编写",
+			Description: "分析前端四则运算计算器的交互需求和页面行为，输出 PRD 文档。",
+		},
+	}
+	output := &AgentTaskOutput{
+		Status:  OutputStatusNeedsReview,
+		Summary: "已输出需求文档",
+		Artifacts: []ArtifactAction{{
+			Name:         "pet-platform-prd.md",
+			ArtifactType: "prd",
+			ContentType:  "text/markdown",
+			Content:      "# 宠物领养平台需求文档\n\n目标：明确领养申请、内容管理和 CMS 配置流程。",
+		}},
+	}
+
+	if err := ValidateOutputForInput("worker", "general", input, output); err == nil {
+		t.Fatal("expected unrelated project content to fail validation")
 	}
 }
 

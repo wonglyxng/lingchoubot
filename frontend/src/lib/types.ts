@@ -260,6 +260,7 @@ export interface WorkflowRun {
   status: string;
   summary: string;
   error: string;
+  metadata: Record<string, unknown>;
   steps?: WorkflowStep[];
   started_at?: string;
   created_at: string;

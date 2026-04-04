@@ -89,6 +89,11 @@ func (te *TemporalEngine) ResumeRun(ctx context.Context, id string) error {
 	return engine.ResumeRun(ctx, id)
 }
 
+func (te *TemporalEngine) ResolveManualIntervention(ctx context.Context, id string, action model.ManualInterventionAction, note string) error {
+	engine := NewEngine(te.registry, te.services, te.workflow, te.logger)
+	return engine.ResolveManualIntervention(ctx, id, action, note)
+}
+
 // CancelRun cancels a Temporal workflow and marks the run as cancelled in the database.
 func (te *TemporalEngine) CancelRun(ctx context.Context, id string) error {
 	run, err := te.workflow.GetRun(ctx, id)

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -24,6 +25,7 @@ func (s *WorkflowService) CreateRun(ctx context.Context, projectID string) (*mod
 	run := &model.WorkflowRun{
 		ProjectID: projectID,
 		Status:    model.WorkflowRunRunning,
+		Metadata:  model.JSON("{}"),
 		StartedAt: time.Now(),
 	}
 	if err := s.runRepo.Create(ctx, run); err != nil {
@@ -60,6 +62,7 @@ func (s *WorkflowService) CompleteRun(ctx context.Context, run *model.WorkflowRu
 	run.Status = model.WorkflowRunCompleted
 	run.Summary = summary
 	run.Error = ""
+	run.Metadata = clearWorkflowManualIntervention(run.Metadata)
 	run.CompletedAt = &now
 	return s.runRepo.UpdateStatus(ctx, run)
 }
@@ -69,15 +72,21 @@ func (s *WorkflowService) WaitForApproval(ctx context.Context, run *model.Workfl
 	run.Status = model.WorkflowRunWaitingApproval
 	run.Summary = summary
 	run.Error = ""
+	run.Metadata = clearWorkflowManualIntervention(run.Metadata)
 	run.CompletedAt = nil
 	return s.runRepo.UpdateStatus(ctx, run)
 }
 
 // WaitForManualIntervention marks a run as waiting for human intervention after a recoverable LLM failure.
-func (s *WorkflowService) WaitForManualIntervention(ctx context.Context, run *model.WorkflowRun, summary, errMsg string) error {
+func (s *WorkflowService) WaitForManualIntervention(ctx context.Context, run *model.WorkflowRun, summary, errMsg string, intervention *model.WorkflowManualIntervention) error {
 	run.Status = model.WorkflowRunWaitingManual
 	run.Summary = summary
 	run.Error = errMsg
+	metadata, err := setWorkflowManualIntervention(run.Metadata, intervention)
+	if err != nil {
+		return fmt.Errorf("encode manual intervention metadata: %w", err)
+	}
+	run.Metadata = metadata
 	run.CompletedAt = nil
 	return s.runRepo.UpdateStatus(ctx, run)
 }
@@ -87,6 +96,7 @@ func (s *WorkflowService) ResumeRun(ctx context.Context, run *model.WorkflowRun,
 	run.Status = model.WorkflowRunRunning
 	run.Summary = summary
 	run.Error = ""
+	run.Metadata = clearWorkflowManualIntervention(run.Metadata)
 	run.CompletedAt = nil
 	return s.runRepo.UpdateStatus(ctx, run)
 }
@@ -96,6 +106,7 @@ func (s *WorkflowService) FailRun(ctx context.Context, run *model.WorkflowRun, e
 	now := time.Now()
 	run.Status = model.WorkflowRunFailed
 	run.Error = errMsg
+	run.Metadata = clearWorkflowManualIntervention(run.Metadata)
 	run.CompletedAt = &now
 	return s.runRepo.UpdateStatus(ctx, run)
 }
@@ -105,8 +116,53 @@ func (s *WorkflowService) CancelRun(ctx context.Context, run *model.WorkflowRun)
 	now := time.Now()
 	run.Status = model.WorkflowRunCancelled
 	run.Error = "cancelled by user"
+	run.Metadata = clearWorkflowManualIntervention(run.Metadata)
 	run.CompletedAt = &now
 	return s.runRepo.UpdateStatus(ctx, run)
+}
+
+func setWorkflowManualIntervention(raw model.JSON, intervention *model.WorkflowManualIntervention) (model.JSON, error) {
+	metadata, err := workflowRunMetadataObject(raw)
+	if err != nil {
+		return nil, err
+	}
+	if intervention == nil {
+		delete(metadata, "manual_intervention")
+	} else {
+		metadata["manual_intervention"] = intervention
+	}
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return nil, err
+	}
+	return model.JSON(encoded), nil
+}
+
+func clearWorkflowManualIntervention(raw model.JSON) model.JSON {
+	metadata, err := workflowRunMetadataObject(raw)
+	if err != nil {
+		return model.JSON("{}")
+	}
+	delete(metadata, "manual_intervention")
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return model.JSON("{}")
+	}
+	return model.JSON(encoded)
+}
+
+func workflowRunMetadataObject(raw model.JSON) (map[string]any, error) {
+	if len(raw) == 0 {
+		return map[string]any{}, nil
+	}
+	parsed := map[string]any{}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, err
+	}
+	if parsed == nil {
+		return map[string]any{}, nil
+	}
+	return parsed, nil
 }
 
 // AddStep creates a new step in the "pending" state.

@@ -1,13 +1,47 @@
 package orchestrator
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
 	"github.com/lingchou/lingchoubot/backend/internal/model"
 	"github.com/lingchou/lingchoubot/backend/internal/reviewpolicy"
 	"github.com/lingchou/lingchoubot/backend/internal/runtime"
+	"github.com/lingchou/lingchoubot/backend/internal/service"
 )
+
+type engineAgentRepoStub struct {
+	findByRoleAndSpec func(ctx context.Context, role model.AgentRole, spec model.AgentSpecialization) (*model.Agent, error)
+}
+
+func (r *engineAgentRepoStub) Create(context.Context, *model.Agent) error { return nil }
+func (r *engineAgentRepoStub) GetByID(context.Context, string) (*model.Agent, error) {
+	return nil, nil
+}
+func (r *engineAgentRepoStub) GetByRoleCode(context.Context, model.RoleCode) (*model.Agent, error) {
+	return nil, nil
+}
+func (r *engineAgentRepoStub) List(context.Context, int, int) ([]*model.Agent, int, error) {
+	return nil, 0, nil
+}
+func (r *engineAgentRepoStub) Update(context.Context, *model.Agent) error { return nil }
+func (r *engineAgentRepoStub) Delete(context.Context, string) error       { return nil }
+func (r *engineAgentRepoStub) GetSubordinates(context.Context, string) ([]*model.Agent, error) {
+	return nil, nil
+}
+func (r *engineAgentRepoStub) GetOrgTree(context.Context, string) ([]*model.Agent, error) {
+	return nil, nil
+}
+func (r *engineAgentRepoStub) FindByRoleAndSpec(ctx context.Context, role model.AgentRole, spec model.AgentSpecialization) (*model.Agent, error) {
+	if r.findByRoleAndSpec == nil {
+		return nil, nil
+	}
+	return r.findByRoleAndSpec(ctx, role, spec)
+}
+func (r *engineAgentRepoStub) FindByRoleCode(context.Context, model.RoleCode) (*model.Agent, error) {
+	return nil, nil
+}
 
 func TestInferSpecialization(t *testing.T) {
 	tests := []struct {
@@ -38,6 +72,11 @@ func TestInferSpecialization(t *testing.T) {
 		{
 			name: "frontend by React keyword",
 			task: &model.Task{Title: "用户列表组件", Description: "使用 React 实现"},
+			want: model.AgentSpecFrontend,
+		},
+		{
+			name: "frontend wins for mixed interaction and api implementation",
+			task: &model.Task{Title: "计算器交互逻辑与API实现", Description: "实现前端交互逻辑与显示屏更新"},
 			want: model.AgentSpecFrontend,
 		},
 		{
@@ -74,6 +113,65 @@ func TestInferSpecialization(t *testing.T) {
 				t.Errorf("inferSpecialization(%q) = %q, want %q", tt.task.Title, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveWorkerSpecialization_PrefersContractTaskCategory(t *testing.T) {
+	task := &model.Task{
+		Title:       "计算器交互逻辑与API实现",
+		Description: "实现计算器前端交互逻辑，包括按钮点击事件处理、显示屏更新等",
+	}
+	contractCtx := &runtime.ContractCtx{
+		ReviewPolicy: &runtime.ReviewPolicyCtx{
+			TaskCategory: "frontend",
+		},
+	}
+
+	got := resolveWorkerSpecialization(task, contractCtx)
+	if got != model.AgentSpecFrontend {
+		t.Fatalf("resolveWorkerSpecialization() = %q, want %q", got, model.AgentSpecFrontend)
+	}
+}
+
+func TestResolveWorkerSpecialization_FallsBackWhenContractCategoryMissing(t *testing.T) {
+	task := &model.Task{
+		Title:       "实现用户管理 API",
+		Description: "补充 CRUD 接口",
+	}
+
+	got := resolveWorkerSpecialization(task, nil)
+	if got != model.AgentSpecBackend {
+		t.Fatalf("resolveWorkerSpecialization() = %q, want %q", got, model.AgentSpecBackend)
+	}
+}
+
+func TestFindAgentWithSpec_AllowsGeneralFallback(t *testing.T) {
+	repo := &engineAgentRepoStub{
+		findByRoleAndSpec: func(_ context.Context, role model.AgentRole, spec model.AgentSpecialization) (*model.Agent, error) {
+			if role != model.AgentRoleWorker || spec != model.AgentSpecDesign {
+				t.Fatalf("unexpected role/spec lookup: %s/%s", role, spec)
+			}
+			return &model.Agent{
+				ID:             "agent-general",
+				Name:           "General Worker",
+				Role:           model.AgentRoleWorker,
+				Specialization: model.AgentSpecGeneral,
+				Status:         model.AgentStatusActive,
+			}, nil
+		},
+	}
+	engine := &Engine{
+		services: &Services{
+			Agent: service.NewAgentService(repo, nil),
+		},
+	}
+
+	agent, err := engine.findAgentWithSpec(context.Background(), model.AgentRoleWorker, model.AgentSpecDesign)
+	if err != nil {
+		t.Fatalf("findAgentWithSpec returned error: %v", err)
+	}
+	if agent == nil || agent.ID != "agent-general" {
+		t.Fatalf("findAgentWithSpec() = %#v, want general fallback agent", agent)
 	}
 }
 
@@ -123,6 +221,16 @@ func TestInferExecutionDomain(t *testing.T) {
 			task: &model.Task{Title: "实现数据库 migration", ExecutionDomain: model.ExecDomainGeneral},
 			want: model.ExecDomainDevelopment,
 		},
+		{
+			name: "architecture task routed to development supervisor domain",
+			task: &model.Task{Title: "系统架构设计", Description: "设计整体架构与模块划分"},
+			want: model.ExecDomainDevelopment,
+		},
+		{
+			name: "release task routed to development supervisor domain",
+			task: &model.Task{Title: "部署上线与文档编写", Description: "部署到生产环境并完成交付"},
+			want: model.ExecDomainDevelopment,
+		},
 	}
 
 	for _, tt := range tests {
@@ -130,6 +238,54 @@ func TestInferExecutionDomain(t *testing.T) {
 			got := inferExecutionDomain(tt.task)
 			if got != tt.want {
 				t.Errorf("inferExecutionDomain(%q) = %q, want %q", tt.task.Title, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInferTaskCategory(t *testing.T) {
+	tests := []struct {
+		name string
+		task *model.Task
+		want string
+	}{
+		{
+			name: "backend by API implementation keyword",
+			task: &model.Task{Title: "实现用户管理 API", Description: "补充 CRUD 接口"},
+			want: "backend",
+		},
+		{
+			name: "frontend wins for mixed interaction and api implementation",
+			task: &model.Task{Title: "计算器交互逻辑与API实现", Description: "实现前端交互逻辑与显示屏更新"},
+			want: "frontend",
+		},
+		{
+			name: "architecture by feasibility and design keywords",
+			task: &model.Task{Title: "技术可行性评估与方案设计", Description: "输出架构方案"},
+			want: "architecture",
+		},
+		{
+			name: "prd should not be misclassified by content publication wording",
+			task: &model.Task{Title: "需求梳理与PRD文档编写", Description: "分析个人博客网站的核心需求，包括文章发布、分类管理、评论功能等，编写详细的产品需求文档"},
+			want: "prd",
+		},
+		{
+			name: "backend title should outrank qa wording in description",
+			task: &model.Task{Title: "后端核心服务开发", Description: "开发内容管理系统的后端服务，实现内容CRUD操作、用户权限验证、数据持久化等核心业务逻辑"},
+			want: "backend",
+		},
+		{
+			name: "release by deployment and launch title",
+			task: &model.Task{Title: "部署上线与文档编写", Description: "将系统部署到生产环境，编写用户操作手册和技术文档，完成项目交付"},
+			want: "release",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := inferTaskCategory(tt.task)
+			if got != tt.want {
+				t.Fatalf("inferTaskCategory(%q) = %q, want %q", tt.task.Title, got, tt.want)
 			}
 		})
 	}
@@ -345,6 +501,29 @@ func TestBuildContractMetadata_PersistsTrimTraceForExtraScoreItems(t *testing.T)
 	}
 	if len(sources) != 2 || sources[0] != "task.description" || sources[1] != "acceptance_criteria" {
 		t.Fatalf("metadata[review_policy_override_source] = %#v, want [task.description acceptance_criteria]", sources)
+	}
+}
+
+func TestBuildContractMetadata_NormalizesCategoryAliasReviewTemplateKey(t *testing.T) {
+	task := &model.Task{
+		Title:       "计算器交互逻辑与API实现",
+		Description: "实现计算器前端交互逻辑，包括按钮点击事件处理、显示屏更新等",
+	}
+	action := runtime.ContractAction{
+		TaskTitle:         task.Title,
+		TaskCategory:      "frontend",
+		ReviewTemplateKey: "frontend",
+	}
+
+	metadata, err := buildContractMetadata(task, action)
+	if err != nil {
+		t.Fatalf("buildContractMetadata: %v", err)
+	}
+	if got := metadata["task_category"]; got != "frontend" {
+		t.Fatalf("metadata[task_category] = %#v, want frontend", got)
+	}
+	if got := metadata["review_template_key"]; got != "frontend_v1" {
+		t.Fatalf("metadata[review_template_key] = %#v, want frontend_v1", got)
 	}
 }
 

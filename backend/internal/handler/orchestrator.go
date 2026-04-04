@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/lingchou/lingchoubot/backend/internal/middleware"
+	"github.com/lingchou/lingchoubot/backend/internal/model"
 	"github.com/lingchou/lingchoubot/backend/internal/orchestrator"
 	"github.com/lingchou/lingchoubot/backend/internal/repository"
 )
@@ -24,6 +25,7 @@ func (h *OrchestratorHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/orchestrator/runs", h.ListRuns)
 	mux.HandleFunc("GET /api/v1/orchestrator/runs/{id}", h.GetRun)
 	mux.HandleFunc("POST /api/v1/orchestrator/runs/{id}/resume", h.ResumeRun)
+	mux.HandleFunc("POST /api/v1/orchestrator/runs/{id}/manual-intervention", h.ResolveManualIntervention)
 	mux.HandleFunc("POST /api/v1/orchestrator/runs/{id}/cancel", h.CancelRun)
 }
 
@@ -106,6 +108,27 @@ func (h *OrchestratorHandler) ResumeRun(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	middleware.JSON(w, http.StatusOK, map[string]string{"status": "running"})
+}
+
+func (h *OrchestratorHandler) ResolveManualIntervention(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Action model.ManualInterventionAction `json:"action"`
+		Note   string                         `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		middleware.ErrorJSON(w, http.StatusBadRequest, "INVALID_BODY", "invalid request body")
+		return
+	}
+	if body.Action == "" {
+		middleware.ErrorJSON(w, http.StatusBadRequest, "MISSING_FIELD", "action is required")
+		return
+	}
+	if err := h.engine.ResolveManualIntervention(r.Context(), id, body.Action, body.Note); err != nil {
+		middleware.ErrorJSON(w, http.StatusBadRequest, "MANUAL_INTERVENTION_ERROR", err.Error())
+		return
+	}
+	middleware.JSON(w, http.StatusOK, map[string]string{"status": "accepted"})
 }
 
 // CancelRun cancels a running workflow.

@@ -16,10 +16,10 @@ func TestLLMRunner_Execute_Success(t *testing.T) {
 		Status:  OutputStatusSuccess,
 		Summary: "项目分解完成",
 		Phases: []PhaseAction{
-			{Name: "设计阶段", Description: "系统设计", SortOrder: 1},
+			{Name: "设计阶段", Description: "测试项目的系统设计", SortOrder: 1},
 		},
 		Tasks: []TaskAction{
-			{PhaseName: "设计阶段", Title: "API 设计", Description: "设计 REST API", Priority: 3},
+			{PhaseName: "设计阶段", Title: "API 设计", Description: "为测试项目设计 REST API", Priority: 3},
 		},
 	}
 	mockJSON, _ := json.Marshal(mockOutput)

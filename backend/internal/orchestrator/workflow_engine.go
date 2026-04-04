@@ -14,5 +14,6 @@ type WorkflowEngine interface {
 	GetRun(ctx context.Context, id string) (*model.WorkflowRun, error)
 	ListRuns(ctx context.Context, params repository.WorkflowRunListParams) ([]*model.WorkflowRun, int, error)
 	ResumeRun(ctx context.Context, id string) error
+	ResolveManualIntervention(ctx context.Context, id string, action model.ManualInterventionAction, note string) error
 	CancelRun(ctx context.Context, id string) error
 }

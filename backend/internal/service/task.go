@@ -102,6 +102,39 @@ func (s *TaskService) TransitionStatus(ctx context.Context, id string, newStatus
 	return nil
 }
 
+// EscalateToPendingApproval moves a revision_required task into pending_approval
+// after a human intervention decision. This is an explicit override path and
+// does not reuse the normal review-driven transition matrix.
+func (s *TaskService) EscalateToPendingApproval(ctx context.Context, id, note string) error {
+	old, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if old == nil {
+		return fmt.Errorf("task not found")
+	}
+	if old.Status != model.TaskStatusRevisionRequired {
+		return fmt.Errorf("task %q is not waiting for manual escalation (status=%s)", old.Title, old.Status)
+	}
+	if err := s.repo.UpdateStatus(ctx, id, model.TaskStatusPendingApproval); err != nil {
+		return err
+	}
+	after := map[string]string{
+		"status": string(model.TaskStatusPendingApproval),
+		"source": "manual_intervention",
+	}
+	if note != "" {
+		after["note"] = note
+	}
+	s.audit.LogEvent(ctx, "user", "", "task.status_changed",
+		fmt.Sprintf("任务「%s」经人工介入放行至审批: %s -> %s", old.Title, old.Status, model.TaskStatusPendingApproval),
+		"task", id,
+		map[string]string{"status": string(old.Status)},
+		after,
+	)
+	return nil
+}
+
 func (s *TaskService) Delete(ctx context.Context, id string) error {
 	old, _ := s.repo.GetByID(ctx, id)
 	if err := s.repo.Delete(ctx, id); err != nil {

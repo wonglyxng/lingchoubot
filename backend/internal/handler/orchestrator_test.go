@@ -17,11 +17,12 @@ import (
 
 // mockWorkflowEngine implements orchestrator.WorkflowEngine for handler tests.
 type mockWorkflowEngine struct {
-	runAsyncFn  func(ctx context.Context, projectID string) (*model.WorkflowRun, error)
-	getRunFn    func(ctx context.Context, id string) (*model.WorkflowRun, error)
-	listRunsFn  func(ctx context.Context, params repository.WorkflowRunListParams) ([]*model.WorkflowRun, int, error)
-	resumeRunFn func(ctx context.Context, id string) error
-	cancelRunFn func(ctx context.Context, id string) error
+	runAsyncFn                  func(ctx context.Context, projectID string) (*model.WorkflowRun, error)
+	getRunFn                    func(ctx context.Context, id string) (*model.WorkflowRun, error)
+	listRunsFn                  func(ctx context.Context, params repository.WorkflowRunListParams) ([]*model.WorkflowRun, int, error)
+	resumeRunFn                 func(ctx context.Context, id string) error
+	resolveManualInterventionFn func(ctx context.Context, id string, action model.ManualInterventionAction, note string) error
+	cancelRunFn                 func(ctx context.Context, id string) error
 }
 
 // Verify interface compliance
@@ -51,6 +52,13 @@ func (m *mockWorkflowEngine) ListRuns(ctx context.Context, params repository.Wor
 func (m *mockWorkflowEngine) ResumeRun(ctx context.Context, id string) error {
 	if m.resumeRunFn != nil {
 		return m.resumeRunFn(ctx, id)
+	}
+	return fmt.Errorf("not implemented")
+}
+
+func (m *mockWorkflowEngine) ResolveManualIntervention(ctx context.Context, id string, action model.ManualInterventionAction, note string) error {
+	if m.resolveManualInterventionFn != nil {
+		return m.resolveManualInterventionFn(ctx, id, action, note)
 	}
 	return fmt.Errorf("not implemented")
 }
@@ -360,6 +368,71 @@ func TestOrchestratorHandler_ResumeRun_Error(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/v1/orchestrator/runs/run-001/resume", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestOrchestratorHandler_ResolveManualIntervention_Success(t *testing.T) {
+	engine := &mockWorkflowEngine{
+		resolveManualInterventionFn: func(ctx context.Context, id string, action model.ManualInterventionAction, note string) error {
+			if id != "run-001" {
+				t.Errorf("expected id 'run-001', got %q", id)
+			}
+			if action != model.ManualInterventionActionEscalateToApproval {
+				t.Errorf("expected action %q, got %q", model.ManualInterventionActionEscalateToApproval, action)
+			}
+			if note != "人工确认当前交付可进入审批" {
+				t.Errorf("unexpected note %q", note)
+			}
+			return nil
+		},
+	}
+
+	h := NewOrchestratorHandler(engine)
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	w := httptest.NewRecorder()
+	body := `{"action":"escalate_to_approval","note":"人工确认当前交付可进入审批"}`
+	r := httptest.NewRequest("POST", "/api/v1/orchestrator/runs/run-001/manual-intervention", strings.NewReader(body))
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestOrchestratorHandler_ResolveManualIntervention_InvalidBody(t *testing.T) {
+	h := NewOrchestratorHandler(&mockWorkflowEngine{})
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/v1/orchestrator/runs/run-001/manual-intervention", strings.NewReader("not-json"))
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestOrchestratorHandler_ResolveManualIntervention_Error(t *testing.T) {
+	engine := &mockWorkflowEngine{
+		resolveManualInterventionFn: func(ctx context.Context, id string, action model.ManualInterventionAction, note string) error {
+			return fmt.Errorf("action not allowed")
+		},
+	}
+
+	h := NewOrchestratorHandler(engine)
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	w := httptest.NewRecorder()
+	body := `{"action":"escalate_to_approval","note":"人工确认当前交付可进入审批"}`
+	r := httptest.NewRequest("POST", "/api/v1/orchestrator/runs/run-001/manual-intervention", strings.NewReader(body))
 	mux.ServeHTTP(w, r)
 
 	if w.Code != http.StatusBadRequest {

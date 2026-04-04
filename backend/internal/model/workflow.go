@@ -15,6 +15,32 @@ const (
 	WorkflowRunCancelled       WorkflowRunStatus = "cancelled"
 )
 
+type ManualInterventionReasonCode string
+
+const (
+	ManualInterventionReasonLLMExecutionFailed ManualInterventionReasonCode = "llm_execution_failed"
+	ManualInterventionReasonReworkLimitReached ManualInterventionReasonCode = "rework_limit_reached"
+)
+
+type ManualInterventionAction string
+
+const (
+	ManualInterventionActionResume             ManualInterventionAction = "resume"
+	ManualInterventionActionEscalateToApproval ManualInterventionAction = "escalate_to_approval"
+	ManualInterventionActionCancelRun          ManualInterventionAction = "cancel_run"
+)
+
+type WorkflowManualIntervention struct {
+	ReasonCode       ManualInterventionReasonCode `json:"reason_code"`
+	Reason           string                       `json:"reason"`
+	AgentRole        string                       `json:"agent_role,omitempty"`
+	PhaseID          string                       `json:"phase_id,omitempty"`
+	PhaseName        string                       `json:"phase_name,omitempty"`
+	TaskID           string                       `json:"task_id,omitempty"`
+	TaskTitle        string                       `json:"task_title,omitempty"`
+	AvailableActions []ManualInterventionAction   `json:"available_actions,omitempty"`
+}
+
 // WorkflowStepStatus represents the state of a single step within a run.
 type WorkflowStepStatus string
 
@@ -33,6 +59,7 @@ type WorkflowRun struct {
 	Status      WorkflowRunStatus `json:"status"`
 	Summary     string            `json:"summary"`
 	Error       string            `json:"error,omitempty"`
+	Metadata    JSON              `json:"metadata"`
 	StartedAt   time.Time         `json:"started_at"`
 	CompletedAt *time.Time        `json:"completed_at,omitempty"`
 	CreatedAt   time.Time         `json:"created_at"`

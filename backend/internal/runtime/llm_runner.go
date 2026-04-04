@@ -120,7 +120,7 @@ func (r *LLMAgentRunner) Execute(input *AgentTaskInput) (*AgentTaskOutput, error
 
 	if valErr := ValidateOutputForInput(r.role, r.spec, input, &output); valErr != nil {
 		r.logger.Warn("LLM output validation failed", "role", r.role, "error", valErr,
-			"prompt_version", pv.Version)
+			"prompt_version", pv.Version, "raw_prefix", truncateStr(raw, 800))
 		return &AgentTaskOutput{
 			Status: OutputStatusFailed,
 			Error:  fmt.Sprintf("output validation: %s", valErr.Error()),

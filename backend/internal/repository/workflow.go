@@ -18,22 +18,22 @@ func NewWorkflowRunRepo(db *sql.DB) *WorkflowRunRepo {
 
 func (r *WorkflowRunRepo) Create(ctx context.Context, run *model.WorkflowRun) error {
 	const q = `
-		INSERT INTO workflow_run (project_id, status, summary, error, started_at)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO workflow_run (project_id, status, summary, error, metadata, started_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id, created_at, updated_at`
 	return r.db.QueryRowContext(ctx, q,
-		run.ProjectID, run.Status, run.Summary, run.Error, run.StartedAt,
+		run.ProjectID, run.Status, run.Summary, run.Error, run.Metadata, run.StartedAt,
 	).Scan(&run.ID, &run.CreatedAt, &run.UpdatedAt)
 }
 
 func (r *WorkflowRunRepo) GetByID(ctx context.Context, id string) (*model.WorkflowRun, error) {
 	const q = `
-		SELECT id, project_id, status, summary, error,
+		SELECT id, project_id, status, summary, error, metadata,
 		       started_at, completed_at, created_at, updated_at
 		FROM workflow_run WHERE id = $1`
 	run := &model.WorkflowRun{}
 	err := r.db.QueryRowContext(ctx, q, id).Scan(
-		&run.ID, &run.ProjectID, &run.Status, &run.Summary, &run.Error,
+		&run.ID, &run.ProjectID, &run.Status, &run.Summary, &run.Error, &run.Metadata,
 		&run.StartedAt, &run.CompletedAt, &run.CreatedAt, &run.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -49,10 +49,10 @@ func (r *WorkflowRunRepo) GetByID(ctx context.Context, id string) (*model.Workfl
 func (r *WorkflowRunRepo) UpdateStatus(ctx context.Context, run *model.WorkflowRun) error {
 	const q = `
 		UPDATE workflow_run
-		SET status = $2, summary = $3, error = $4, completed_at = $5, updated_at = now()
+		SET status = $2, summary = $3, error = $4, metadata = $5, completed_at = $6, updated_at = now()
 		WHERE id = $1`
 	res, err := r.db.ExecContext(ctx, q,
-		run.ID, run.Status, run.Summary, run.Error, run.CompletedAt,
+		run.ID, run.Status, run.Summary, run.Error, run.Metadata, run.CompletedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("workflow_run.UpdateStatus: %w", err)
@@ -94,7 +94,7 @@ func (r *WorkflowRunRepo) List(ctx context.Context, p WorkflowRunListParams) ([]
 	}
 
 	q := fmt.Sprintf(`
-		SELECT id, project_id, status, summary, error,
+		SELECT id, project_id, status, summary, error, metadata,
 		       started_at, completed_at, created_at, updated_at
 		FROM workflow_run %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`,
 		where, idx, idx+1)
@@ -110,7 +110,7 @@ func (r *WorkflowRunRepo) List(ctx context.Context, p WorkflowRunListParams) ([]
 	for rows.Next() {
 		run := &model.WorkflowRun{}
 		if err := rows.Scan(
-			&run.ID, &run.ProjectID, &run.Status, &run.Summary, &run.Error,
+			&run.ID, &run.ProjectID, &run.Status, &run.Summary, &run.Error, &run.Metadata,
 			&run.StartedAt, &run.CompletedAt, &run.CreatedAt, &run.UpdatedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("workflow_run.List scan: %w", err)

@@ -39,12 +39,13 @@ type runCtx struct {
 var errPhaseWaitingApproval = errors.New("phase waiting approval")
 
 type manualInterventionError struct {
-	agentRole string
-	phaseID   string
-	phaseName string
-	taskID    string
-	taskTitle string
-	reason    string
+	reasonCode model.ManualInterventionReasonCode
+	agentRole  string
+	phaseID    string
+	phaseName  string
+	taskID     string
+	taskTitle  string
+	reason     string
 }
 
 func (e *manualInterventionError) Error() string {
@@ -54,14 +55,15 @@ func (e *manualInterventionError) Error() string {
 	return e.reason
 }
 
-func newManualInterventionError(agentRole, phaseID, phaseName, taskID, taskTitle, reason string) error {
+func newManualInterventionError(reasonCode model.ManualInterventionReasonCode, agentRole, phaseID, phaseName, taskID, taskTitle, reason string) error {
 	return &manualInterventionError{
-		agentRole: agentRole,
-		phaseID:   phaseID,
-		phaseName: phaseName,
-		taskID:    taskID,
-		taskTitle: taskTitle,
-		reason:    reason,
+		reasonCode: reasonCode,
+		agentRole:  agentRole,
+		phaseID:    phaseID,
+		phaseName:  phaseName,
+		taskID:     taskID,
+		taskTitle:  taskTitle,
+		reason:     reason,
 	}
 }
 
@@ -164,6 +166,44 @@ func (e *Engine) ResumeRun(ctx context.Context, id string) error {
 	}()
 
 	return nil
+}
+
+// ResolveManualIntervention applies a human decision for a waiting_manual_intervention run.
+func (e *Engine) ResolveManualIntervention(ctx context.Context, id string, action model.ManualInterventionAction, note string) error {
+	run, err := e.workflow.GetRun(ctx, id)
+	if err != nil {
+		return fmt.Errorf("get run: %w", err)
+	}
+	if run == nil {
+		return fmt.Errorf("run %s not found", id)
+	}
+	if run.Status != model.WorkflowRunWaitingManual {
+		return fmt.Errorf("run %s is not waiting for manual intervention (status=%s)", id, run.Status)
+	}
+
+	intervention, err := decodeWorkflowManualIntervention(run.Metadata)
+	if err != nil {
+		return fmt.Errorf("decode manual intervention: %w", err)
+	}
+	if intervention == nil {
+		return fmt.Errorf("run %s has no manual intervention context", id)
+	}
+
+	switch action {
+	case model.ManualInterventionActionEscalateToApproval:
+		if intervention.ReasonCode != model.ManualInterventionReasonReworkLimitReached {
+			return fmt.Errorf("manual action %q is not allowed for reason %q", action, intervention.ReasonCode)
+		}
+		if intervention.TaskID == "" {
+			return fmt.Errorf("manual intervention task context is missing")
+		}
+		if err := e.escalateTaskToApproval(ctx, run, intervention, note); err != nil {
+			return err
+		}
+		return e.ResumeRun(ctx, id)
+	default:
+		return fmt.Errorf("unsupported manual intervention action %q", action)
+	}
 }
 
 // Run executes the full workflow for a project: PM → Supervisor → Worker → Reviewer.
@@ -345,7 +385,7 @@ func (e *Engine) runPMPhase(ctx context.Context, rc *runCtx, proj *model.Project
 	}
 	if output.Status == runtime.OutputStatusFailed {
 		_ = e.workflow.FailStep(ctx, step, output.Error)
-		return newManualInterventionError("pm", "", "", "", "", output.Error)
+		return newManualInterventionError(model.ManualInterventionReasonLLMExecutionFailed, "pm", "", "", "", "", output.Error)
 	}
 
 	if err := e.processPhaseActions(ctx, proj.ID, output.Phases); err != nil {
@@ -493,6 +533,7 @@ func (e *Engine) runWorkerReviewerLoop(ctx context.Context, rc *runCtx, proj *mo
 		if attempt == maxReworkAttempts {
 			e.logger.Warn("max rework attempts reached", "task", task.Title)
 			return newManualInterventionError(
+				model.ManualInterventionReasonReworkLimitReached,
 				"supervisor",
 				phase.ID,
 				phase.Name,
@@ -579,7 +620,7 @@ func (e *Engine) runSupervisor(ctx context.Context, rc *runCtx, proj *model.Proj
 	}
 	if output.Status == runtime.OutputStatusFailed {
 		_ = e.workflow.FailStep(ctx, step, output.Error)
-		return newManualInterventionError("supervisor", phase.ID, phase.Name, task.ID, task.Title, output.Error)
+		return newManualInterventionError(model.ManualInterventionReasonLLMExecutionFailed, "supervisor", phase.ID, phase.Name, task.ID, task.Title, output.Error)
 	}
 
 	if err := e.processContractActions(ctx, task, output.Contracts); err != nil {
@@ -600,7 +641,11 @@ func (e *Engine) runSupervisor(ctx context.Context, rc *runCtx, proj *model.Proj
 }
 
 func (e *Engine) runWorker(ctx context.Context, rc *runCtx, proj *model.Project, phase *model.Phase, task *model.Task) error {
-	spec := inferSpecialization(task)
+	contractCtx, err := e.loadContractContext(ctx, task)
+	if err != nil {
+		return err
+	}
+	spec := resolveWorkerSpecialization(task, contractCtx)
 	stepName := fmt.Sprintf("执行「%s」", task.Title)
 	if spec != model.AgentSpecGeneral {
 		stepName = fmt.Sprintf("执行「%s」(%s)", task.Title, spec)
@@ -636,12 +681,6 @@ func (e *Engine) runWorker(ctx context.Context, rc *runCtx, proj *model.Project,
 		return err
 	}
 
-	contractCtx, err := e.loadContractContext(ctx, task)
-	if err != nil {
-		_ = e.workflow.FailStep(ctx, step, err.Error())
-		return err
-	}
-
 	input := &runtime.AgentTaskInput{
 		RunID:       rc.run.ID,
 		AgentID:     agent.ID,
@@ -661,7 +700,7 @@ func (e *Engine) runWorker(ctx context.Context, rc *runCtx, proj *model.Project,
 	}
 	if output.Status == runtime.OutputStatusFailed {
 		_ = e.workflow.FailStep(ctx, step, output.Error)
-		return newManualInterventionError("worker", phase.ID, phase.Name, task.ID, task.Title, output.Error)
+		return newManualInterventionError(model.ManualInterventionReasonLLMExecutionFailed, "worker", phase.ID, phase.Name, task.ID, task.Title, output.Error)
 	}
 
 	if err := e.processArtifactActions(ctx, proj.ID, task.ID, agent.ID, output.Artifacts); err != nil {
@@ -740,7 +779,7 @@ func (e *Engine) runReviewer(ctx context.Context, rc *runCtx, proj *model.Projec
 	}
 	if output.Status == runtime.OutputStatusFailed {
 		_ = e.workflow.FailStep(ctx, step, output.Error)
-		return newManualInterventionError("reviewer", phase.ID, phase.Name, task.ID, task.Title, output.Error)
+		return newManualInterventionError(model.ManualInterventionReasonLLMExecutionFailed, "reviewer", phase.ID, phase.Name, task.ID, task.Title, output.Error)
 	}
 
 	if err := e.processReviewActions(ctx, rc.run.ID, task.ID, agent.ID, artifactCtxs, contractCtx, output.Reviews); err != nil {
@@ -825,10 +864,14 @@ func (e *Engine) processContractActions(ctx context.Context, task *model.Task, a
 }
 
 func (e *Engine) processAssignmentActions(ctx context.Context, task *model.Task, assignedBy string, actions []runtime.AssignmentAction) error {
+	contractCtx, err := e.loadContractContext(ctx, task)
+	if err != nil {
+		return fmt.Errorf("load contract context for assignment routing: %w", err)
+	}
 	for _, a := range actions {
 		spec := model.AgentSpecGeneral
 		if model.AgentRole(a.AgentRole) == model.AgentRoleWorker {
-			spec = inferSpecialization(task)
+			spec = resolveWorkerSpecialization(task, contractCtx)
 		}
 		workerAgent, err := e.findAgentWithSpec(ctx, model.AgentRole(a.AgentRole), spec)
 		if err != nil {
@@ -1129,7 +1172,11 @@ func buildContractMetadata(task *model.Task, action runtime.ContractAction) (map
 		return nil, err
 	}
 	if action.ReviewTemplateKey != "" && action.ReviewTemplateKey != resolved.TemplateKey {
-		return nil, fmt.Errorf("review_template_key %q does not match resolved template %q", action.ReviewTemplateKey, resolved.TemplateKey)
+		if strings.TrimSpace(action.ReviewTemplateKey) == resolved.TaskCategory {
+			action.ReviewTemplateKey = resolved.TemplateKey
+		} else {
+			return nil, fmt.Errorf("review_template_key %q does not match resolved template %q", action.ReviewTemplateKey, resolved.TemplateKey)
+		}
 	}
 	reviewPolicyReason := strings.TrimSpace(action.ReviewPolicyReason)
 	reviewPolicySource := normalizeReviewPolicySources(action.ReviewPolicySource)
@@ -1272,39 +1319,10 @@ func inferTaskCategory(task *model.Task) string {
 	if task == nil {
 		return "architecture"
 	}
-	combined := task.Title + " " + task.Description
-
-	if containsCI(combined, "发布") || containsCI(combined, "部署") || containsCI(combined, "上线") || containsCI(combined, "release") {
-		return "release"
+	if category := inferTaskCategoryFromKeywords(task); category != "" {
+		return category
 	}
-	if containsCI(combined, "测试") || containsCI(combined, "验收") || containsCI(combined, "QA") || containsCI(combined, "quality") {
-		return "qa"
-	}
-	if containsCI(combined, "前端") || containsCI(combined, "页面") || containsCI(combined, "UI") || containsCI(combined, "交互") {
-		return "frontend"
-	}
-	if containsCI(combined, "PRD") || containsCI(combined, "需求") || containsCI(combined, "规格") || containsCI(combined, "文档") {
-		return "prd"
-	}
-	if containsCI(combined, "架构") || containsCI(combined, "方案") || containsCI(combined, "设计") || containsCI(combined, "可行性") || containsCI(combined, "评估") || containsCI(combined, "数据库") || containsCI(combined, "接口") || containsCI(combined, "API") {
-		return "architecture"
-	}
-	if containsCI(combined, "后端") || containsCI(combined, "服务端") || containsCI(combined, "开发") || containsCI(combined, "实现") || containsCI(combined, "handler") || containsCI(combined, "repository") {
-		return "backend"
-	}
-
-	switch inferSpecialization(task) {
-	case model.AgentSpecFrontend:
-		return "frontend"
-	case model.AgentSpecQA:
-		return "qa"
-	case model.AgentSpecRelease:
-		return "release"
-	case model.AgentSpecBackend:
-		return "backend"
-	default:
-		return "architecture"
-	}
+	return "architecture"
 }
 
 func extractInlineContent(raw model.JSON) string {
@@ -1367,7 +1385,7 @@ func (e *Engine) findAgentWithSpec(ctx context.Context, role model.AgentRole, sp
 	if err != nil {
 		return nil, fmt.Errorf("find agent (%s/%s): %w", role, spec, err)
 	}
-	if agent != nil && agent.Specialization == spec {
+	if agent != nil {
 		return agent, nil
 	}
 	return nil, fmt.Errorf("no active agent with role %q (specialization %q) found", role, spec)
@@ -1401,48 +1419,109 @@ func inferExecutionDomain(task *model.Task) model.ExecutionDomain {
 	if task.ExecutionDomain != "" && task.ExecutionDomain != model.ExecDomainGeneral {
 		return task.ExecutionDomain
 	}
-	combined := task.Title + " " + task.Description
-
-	qaKeywords := []string{"测试", "验证", "回归", "QA", "test", "质量", "评审"}
-	for _, w := range qaKeywords {
-		if containsCI(combined, w) {
-			return model.ExecDomainQA
-		}
+	switch inferTaskCategory(task) {
+	case "qa":
+		return model.ExecDomainQA
+	case "architecture", "backend", "frontend", "release":
+		return model.ExecDomainDevelopment
 	}
 
-	devKeywords := []string{"API", "接口", "后端", "前端", "页面", "组件", "数据库",
-		"migration", "服务端", "handler", "repository", "React", "Next.js", "实现", "开发"}
-	for _, w := range devKeywords {
-		if containsCI(combined, w) {
-			return model.ExecDomainDevelopment
-		}
+	switch inferSpecialization(task) {
+	case model.AgentSpecBackend, model.AgentSpecFrontend, model.AgentSpecDevOps:
+		return model.ExecDomainDevelopment
+	case model.AgentSpecQA:
+		return model.ExecDomainQA
+	default:
+		return model.ExecDomainGeneral
 	}
-
-	return model.ExecDomainGeneral
 }
 
 // inferSpecialization determines the best worker specialization based on task content.
 func inferSpecialization(task *model.Task) model.AgentSpecialization {
-	title := task.Title
-	desc := task.Description
-	combined := title + " " + desc
-
-	keywords := map[model.AgentSpecialization][]string{
-		model.AgentSpecBackend:  {"API", "接口", "后端", "数据库", "migration", "服务端", "handler", "repository"},
-		model.AgentSpecFrontend: {"前端", "页面", "组件", "UI", "React", "Next.js", "样式", "布局"},
-		model.AgentSpecQA:       {"测试", "验证", "回归", "QA", "test", "质量"},
-		model.AgentSpecRelease:  {"发布", "部署", "release", "deploy", "上线"},
-		model.AgentSpecDevOps:   {"CI", "CD", "Docker", "Kubernetes", "基础设施", "监控"},
+	if task == nil {
+		return model.AgentSpecGeneral
+	}
+	if spec := specializationForTaskCategory(inferTaskCategoryFromKeywords(task)); spec != model.AgentSpecGeneral {
+		return spec
 	}
 
-	for spec, words := range keywords {
-		for _, w := range words {
-			if containsCI(combined, w) {
-				return spec
-			}
+	combined := task.Title + " " + task.Description
+	for _, rule := range []struct {
+		spec     model.AgentSpecialization
+		keywords []string
+	}{
+		{spec: model.AgentSpecDevOps, keywords: []string{"CI", "CD", "Docker", "Kubernetes", "基础设施", "监控"}},
+		{spec: model.AgentSpecDesign, keywords: []string{"视觉设计", "交互设计", "原型", "Figma"}},
+	} {
+		if containsAnyCI(combined, rule.keywords) {
+			return rule.spec
 		}
 	}
 	return model.AgentSpecGeneral
+}
+
+func inferTaskCategoryFromKeywords(task *model.Task) string {
+	if task == nil {
+		return ""
+	}
+	title := strings.TrimSpace(task.Title)
+	if category := matchTaskCategoryText(title); category != "" {
+		return category
+	}
+	combined := task.Title + " " + task.Description
+	return matchTaskCategoryText(combined)
+}
+
+func matchTaskCategoryText(text string) string {
+	for _, rule := range []struct {
+		category string
+		keywords []string
+	}{
+		{category: "release", keywords: []string{"版本发布", "发布计划", "生产环境", "部署", "上线", "release", "deploy", "回滚", "发布说明", "发布单"}},
+		{category: "qa", keywords: []string{"测试", "验收", "QA", "quality", "验证", "回归", "评审"}},
+		{category: "frontend", keywords: []string{"前端", "页面", "组件", "UI", "交互", "React", "Next.js", "样式", "布局", "响应式"}},
+		{category: "prd", keywords: []string{"PRD", "需求", "规格", "文档", "梳理"}},
+		{category: "architecture", keywords: []string{"架构", "方案", "可行性", "评估"}},
+		{category: "backend", keywords: []string{"API", "接口", "后端", "数据库", "migration", "服务端", "handler", "repository", "service", "实现", "开发"}},
+	} {
+		if containsAnyCI(text, rule.keywords) {
+			return rule.category
+		}
+	}
+	return ""
+}
+
+func resolveWorkerSpecialization(task *model.Task, contractCtx *runtime.ContractCtx) model.AgentSpecialization {
+	if contractCtx != nil && contractCtx.ReviewPolicy != nil {
+		if spec := specializationForTaskCategory(contractCtx.ReviewPolicy.TaskCategory); spec != model.AgentSpecGeneral {
+			return spec
+		}
+	}
+	return inferSpecialization(task)
+}
+
+func specializationForTaskCategory(taskCategory string) model.AgentSpecialization {
+	switch strings.TrimSpace(taskCategory) {
+	case "backend":
+		return model.AgentSpecBackend
+	case "frontend":
+		return model.AgentSpecFrontend
+	case "qa":
+		return model.AgentSpecQA
+	case "release":
+		return model.AgentSpecRelease
+	default:
+		return model.AgentSpecGeneral
+	}
+}
+
+func containsAnyCI(s string, keywords []string) bool {
+	for _, keyword := range keywords {
+		if containsCI(s, keyword) {
+			return true
+		}
+	}
+	return false
 }
 
 // containsCI performs a case-insensitive substring check.
@@ -1505,19 +1584,32 @@ func (e *Engine) handleRunInterruption(ctx context.Context, rc *runCtx, proj *mo
 }
 
 func (e *Engine) waitForManualIntervention(ctx context.Context, rc *runCtx, proj *model.Project, manualErr *manualInterventionError) error {
-	summary := fmt.Sprintf("项目「%s」因 LLM 执行失败等待人工介入", proj.Name)
-	if manualErr.taskTitle != "" {
-		summary = fmt.Sprintf("项目「%s」任务「%s」因 %s 执行失败等待人工介入", proj.Name, manualErr.taskTitle, manualErr.agentRole)
-	} else if manualErr.agentRole != "" {
-		summary = fmt.Sprintf("项目「%s」在 %s 步骤因 LLM 执行失败等待人工介入", proj.Name, manualErr.agentRole)
+	intervention := manualInterventionStateFromError(manualErr)
+	summary := fmt.Sprintf("项目「%s」等待人工介入", proj.Name)
+	switch intervention.ReasonCode {
+	case model.ManualInterventionReasonReworkLimitReached:
+		if intervention.TaskTitle != "" {
+			summary = fmt.Sprintf("项目「%s」任务「%s」返工次数已达上限，等待人工处理", proj.Name, intervention.TaskTitle)
+		} else {
+			summary = fmt.Sprintf("项目「%s」返工次数已达上限，等待人工处理", proj.Name)
+		}
+	default:
+		if intervention.TaskTitle != "" {
+			summary = fmt.Sprintf("项目「%s」任务「%s」因 %s 执行失败等待人工介入", proj.Name, intervention.TaskTitle, intervention.AgentRole)
+		} else if intervention.AgentRole != "" {
+			summary = fmt.Sprintf("项目「%s」在 %s 步骤因 LLM 执行失败等待人工介入", proj.Name, intervention.AgentRole)
+		} else {
+			summary = fmt.Sprintf("项目「%s」因 LLM 执行失败等待人工介入", proj.Name)
+		}
 	}
-	if err := e.workflow.WaitForManualIntervention(ctx, rc.run, summary, manualErr.reason); err != nil {
+	if err := e.workflow.WaitForManualIntervention(ctx, rc.run, summary, manualErr.reason, intervention); err != nil {
 		return fmt.Errorf("mark run waiting manual intervention: %w", err)
 	}
 	after := map[string]string{
-		"run_id":     rc.run.ID,
-		"agent_role": manualErr.agentRole,
-		"error":      manualErr.reason,
+		"run_id":      rc.run.ID,
+		"agent_role":  manualErr.agentRole,
+		"error":       manualErr.reason,
+		"reason_code": string(intervention.ReasonCode),
 	}
 	if manualErr.phaseID != "" {
 		after["phase_id"] = manualErr.phaseID
@@ -1528,6 +1620,138 @@ func (e *Engine) waitForManualIntervention(ctx context.Context, rc *runCtx, proj
 	e.services.Audit.LogEvent(ctx, "system", "", "workflow.waiting_manual_intervention",
 		summary, "project", proj.ID, nil, after)
 	return nil
+}
+
+func manualInterventionStateFromError(manualErr *manualInterventionError) *model.WorkflowManualIntervention {
+	if manualErr == nil {
+		return nil
+	}
+	actions := []model.ManualInterventionAction{
+		model.ManualInterventionActionResume,
+		model.ManualInterventionActionCancelRun,
+	}
+	if manualErr.reasonCode == model.ManualInterventionReasonReworkLimitReached {
+		actions = append([]model.ManualInterventionAction{model.ManualInterventionActionEscalateToApproval}, actions...)
+	}
+	return &model.WorkflowManualIntervention{
+		ReasonCode:       manualErr.reasonCode,
+		Reason:           manualErr.reason,
+		AgentRole:        manualErr.agentRole,
+		PhaseID:          manualErr.phaseID,
+		PhaseName:        manualErr.phaseName,
+		TaskID:           manualErr.taskID,
+		TaskTitle:        manualErr.taskTitle,
+		AvailableActions: actions,
+	}
+}
+
+func decodeWorkflowManualIntervention(raw model.JSON) (*model.WorkflowManualIntervention, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var metadata struct {
+		ManualIntervention *model.WorkflowManualIntervention `json:"manual_intervention"`
+	}
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return nil, err
+	}
+	return metadata.ManualIntervention, nil
+}
+
+func (e *Engine) escalateTaskToApproval(ctx context.Context, run *model.WorkflowRun, intervention *model.WorkflowManualIntervention, note string) error {
+	task, err := e.services.Task.GetByID(ctx, intervention.TaskID)
+	if err != nil {
+		return fmt.Errorf("load task for manual intervention: %w", err)
+	}
+	if task == nil {
+		return fmt.Errorf("task %s not found", intervention.TaskID)
+	}
+	if err := e.services.Task.EscalateToPendingApproval(ctx, task.ID, note); err != nil {
+		return fmt.Errorf("escalate task to pending approval: %w", err)
+	}
+
+	metadata, description, err := e.buildManualInterventionApprovalPayload(ctx, run, task, intervention, note)
+	if err != nil {
+		return err
+	}
+	metaJSON := model.JSON("{}")
+	if len(metadata) > 0 {
+		encoded, marshalErr := json.Marshal(metadata)
+		if marshalErr != nil {
+			return fmt.Errorf("marshal manual intervention approval metadata: %w", marshalErr)
+		}
+		metaJSON = model.JSON(encoded)
+	}
+	approval := &model.ApprovalRequest{
+		ProjectID:    task.ProjectID,
+		TaskID:       &task.ID,
+		RequestedBy:  "system",
+		ApproverType: "user",
+		Title:        fmt.Sprintf("任务「%s」已由人工介入放行，等待审批", task.Title),
+		Description:  description,
+		Metadata:     metaJSON,
+	}
+	if err := e.services.Approval.Create(ctx, approval); err != nil {
+		return fmt.Errorf("create approval request for manual intervention: %w", err)
+	}
+
+	e.services.Audit.LogEvent(ctx, "user", "", "workflow.manual_intervention_resolved",
+		fmt.Sprintf("任务「%s」已由人工介入放行至审批", task.Title),
+		"task", task.ID, nil, map[string]string{
+			"run_id":      run.ID,
+			"action":      string(model.ManualInterventionActionEscalateToApproval),
+			"reason_code": string(intervention.ReasonCode),
+			"note":        note,
+		})
+	return nil
+}
+
+func (e *Engine) buildManualInterventionApprovalPayload(ctx context.Context, run *model.WorkflowRun, task *model.Task, intervention *model.WorkflowManualIntervention, note string) (map[string]any, string, error) {
+	metadata := map[string]any{
+		"source":                          "manual_intervention",
+		"run_id":                          run.ID,
+		"task_title":                      task.Title,
+		"manual_intervention_action":      string(model.ManualInterventionActionEscalateToApproval),
+		"manual_intervention_reason_code": string(intervention.ReasonCode),
+	}
+	if note != "" {
+		metadata["manual_intervention_note"] = note
+	}
+	if task.PhaseID != nil {
+		metadata["phase_id"] = *task.PhaseID
+	}
+
+	description := fmt.Sprintf("任务「%s」因人工介入放行进入审批。", task.Title)
+	reviews, _, err := e.services.Review.List(ctx, repository.ReviewListParams{
+		TaskID: task.ID,
+		Limit:  1,
+		Offset: 0,
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("load latest review for manual intervention: %w", err)
+	}
+	if len(reviews) > 0 {
+		review := reviews[0]
+		metadata["review_id"] = review.ID
+		metadata["review_verdict"] = review.Verdict
+		metadata["review_summary"] = review.Summary
+		findings, err := jsonArrayToStringsSafe(review.Findings)
+		if err != nil {
+			return nil, "", fmt.Errorf("parse review findings: %w", err)
+		}
+		recommendations, err := jsonArrayToStringsSafe(review.Recommendations)
+		if err != nil {
+			return nil, "", fmt.Errorf("parse review recommendations: %w", err)
+		}
+		metadata["findings"] = findings
+		metadata["recommendations"] = recommendations
+		description = fmt.Sprintf("%s 最近一次评审摘要：%s。", description, review.Summary)
+	}
+	if note != "" {
+		description = fmt.Sprintf("%s 人工说明：%s。", description, note)
+	}
+	description += "等待审批确认。"
+	return metadata, description, nil
 }
 
 func shouldResumeFromPM(run *model.WorkflowRun) bool {

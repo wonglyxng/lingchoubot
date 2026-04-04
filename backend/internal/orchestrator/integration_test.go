@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -746,6 +747,29 @@ func TestIntegration_MaxReworkExceeded(t *testing.T) {
 	if run.Status != model.WorkflowRunWaitingManual {
 		t.Errorf("run status = %q, want %q", run.Status, model.WorkflowRunWaitingManual)
 	}
+	var runMeta struct {
+		ManualIntervention struct {
+			ReasonCode       string   `json:"reason_code"`
+			TaskID           string   `json:"task_id"`
+			TaskTitle        string   `json:"task_title"`
+			AvailableActions []string `json:"available_actions"`
+		} `json:"manual_intervention"`
+	}
+	if err := json.Unmarshal(run.Metadata, &runMeta); err != nil {
+		t.Fatalf("unmarshal run metadata: %v", err)
+	}
+	if runMeta.ManualIntervention.ReasonCode != string(model.ManualInterventionReasonReworkLimitReached) {
+		t.Fatalf("manual intervention reason_code = %q, want %q", runMeta.ManualIntervention.ReasonCode, model.ManualInterventionReasonReworkLimitReached)
+	}
+	if runMeta.ManualIntervention.TaskID == "" {
+		t.Fatal("expected manual intervention task_id to be populated")
+	}
+	if runMeta.ManualIntervention.TaskTitle == "" {
+		t.Fatal("expected manual intervention task_title to be populated")
+	}
+	if !containsString(runMeta.ManualIntervention.AvailableActions, string(model.ManualInterventionActionEscalateToApproval)) {
+		t.Fatalf("expected available_actions to include %q, got %#v", model.ManualInterventionActionEscalateToApproval, runMeta.ManualIntervention.AvailableActions)
+	}
 
 	// Only the first failing task should consume the full rework budget before the run aborts.
 	reviewCount := f.ReviewRepo.TotalCount()
@@ -773,6 +797,185 @@ func TestIntegration_MaxReworkExceeded(t *testing.T) {
 	if hasCompleted {
 		t.Error("unexpected workflow.completed audit event")
 	}
+}
+
+func TestIntegration_ResolveManualIntervention_EscalatesTaskToApproval(t *testing.T) {
+	ctx := context.Background()
+	f := testutil.NewFixture()
+
+	f.Registry.Register("pm", &singleTaskPMRunner{
+		phaseName: "开发实现",
+		taskTitle: "贪吃蛇游戏核心逻辑实现",
+		taskDesc:  "实现贪吃蛇游戏的移动、碰撞与得分逻辑",
+	})
+	alwaysReject := &alwaysRejectReviewer{}
+	f.Registry.Register("reviewer", alwaysReject)
+
+	if err := f.SeedStandardAgents(ctx); err != nil {
+		t.Fatalf("seed agents: %v", err)
+	}
+
+	proj := &model.Project{Name: "人工放行审批项目", Description: "验证返工超限后的人工放行路径"}
+	if err := f.ProjectSvc.Create(ctx, proj); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	run, err := f.Engine.Run(ctx, proj.ID)
+	if err != nil {
+		t.Fatalf("Engine.Run: %v", err)
+	}
+	if run.Status != model.WorkflowRunWaitingManual {
+		t.Fatalf("run status = %q, want %q", run.Status, model.WorkflowRunWaitingManual)
+	}
+
+	if err := f.Engine.ResolveManualIntervention(ctx, run.ID, model.ManualInterventionActionEscalateToApproval, "人工确认当前交付可进入审批"); err != nil {
+		t.Fatalf("ResolveManualIntervention: %v", err)
+	}
+
+	var finalRun *model.WorkflowRun
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		finalRun, err = f.WorkflowSvc.GetRun(ctx, run.ID)
+		if err != nil {
+			t.Fatalf("GetRun after manual intervention: %v", err)
+		}
+		if finalRun != nil && finalRun.Status == model.WorkflowRunWaitingApproval {
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if finalRun == nil {
+		t.Fatal("run not found after manual intervention")
+	}
+	if finalRun.Status != model.WorkflowRunWaitingApproval {
+		t.Fatalf("final run status = %q, want %q", finalRun.Status, model.WorkflowRunWaitingApproval)
+	}
+
+	var runMeta struct {
+		ManualIntervention map[string]any `json:"manual_intervention"`
+	}
+	if err := json.Unmarshal(finalRun.Metadata, &runMeta); err != nil {
+		t.Fatalf("unmarshal final run metadata: %v", err)
+	}
+	if len(runMeta.ManualIntervention) != 0 {
+		t.Fatalf("expected manual_intervention metadata cleared after resolution, got %#v", runMeta.ManualIntervention)
+	}
+
+	approvals, total, err := f.ApprovalSvc.List(ctx, repository.ApprovalListParams{ProjectID: proj.ID, Limit: 20, Offset: 0})
+	if err != nil {
+		t.Fatalf("list approvals: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("approval total = %d, want 1", total)
+	}
+	approval := approvals[0]
+	if approval.Status != model.ApprovalStatusPending {
+		t.Fatalf("approval status = %q, want %q", approval.Status, model.ApprovalStatusPending)
+	}
+	var approvalMeta struct {
+		Source                   string `json:"source"`
+		RunID                    string `json:"run_id"`
+		ManualInterventionAction string `json:"manual_intervention_action"`
+		ManualInterventionNote   string `json:"manual_intervention_note"`
+		ManualInterventionReason string `json:"manual_intervention_reason_code"`
+		TaskTitle                string `json:"task_title"`
+	}
+	if err := json.Unmarshal(approval.Metadata, &approvalMeta); err != nil {
+		t.Fatalf("unmarshal approval metadata: %v", err)
+	}
+	if approvalMeta.Source != "manual_intervention" {
+		t.Fatalf("approval metadata source = %q, want %q", approvalMeta.Source, "manual_intervention")
+	}
+	if approvalMeta.RunID != run.ID {
+		t.Fatalf("approval metadata run_id = %q, want %q", approvalMeta.RunID, run.ID)
+	}
+	if approvalMeta.ManualInterventionAction != string(model.ManualInterventionActionEscalateToApproval) {
+		t.Fatalf("approval metadata manual_intervention_action = %q, want %q", approvalMeta.ManualInterventionAction, model.ManualInterventionActionEscalateToApproval)
+	}
+	if approvalMeta.ManualInterventionNote != "人工确认当前交付可进入审批" {
+		t.Fatalf("approval metadata manual_intervention_note = %q", approvalMeta.ManualInterventionNote)
+	}
+	if approvalMeta.ManualInterventionReason != string(model.ManualInterventionReasonReworkLimitReached) {
+		t.Fatalf("approval metadata manual_intervention_reason_code = %q, want %q", approvalMeta.ManualInterventionReason, model.ManualInterventionReasonReworkLimitReached)
+	}
+	if approvalMeta.TaskTitle == "" {
+		t.Fatal("expected approval metadata task_title to be populated")
+	}
+
+	taskID, err := approvalTaskID(approval)
+	if err != nil {
+		t.Fatalf("approvalTaskID: %v", err)
+	}
+	task, err := f.TaskSvc.GetByID(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if task == nil {
+		t.Fatal("task not found after manual intervention")
+	}
+	if task.Status != model.TaskStatusPendingApproval {
+		t.Fatalf("task status = %q, want %q", task.Status, model.TaskStatusPendingApproval)
+	}
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
+func approvalTaskID(approval *model.ApprovalRequest) (string, error) {
+	if approval == nil || approval.TaskID == nil || *approval.TaskID == "" {
+		return "", fmt.Errorf("approval missing task_id")
+	}
+	return *approval.TaskID, nil
+}
+
+type singleTaskPMRunner struct {
+	phaseName string
+	taskTitle string
+	taskDesc  string
+}
+
+func (r *singleTaskPMRunner) Role() string { return "pm" }
+
+func (r *singleTaskPMRunner) Execute(input *runtime.AgentTaskInput) (*runtime.AgentTaskOutput, error) {
+	if input == nil || input.Project == nil {
+		return &runtime.AgentTaskOutput{Status: runtime.OutputStatusFailed, Error: "pm runner requires project context"}, nil
+	}
+	phaseName := r.phaseName
+	if phaseName == "" {
+		phaseName = "开发实现"
+	}
+	taskTitle := r.taskTitle
+	if taskTitle == "" {
+		taskTitle = "单任务实现"
+	}
+	taskDesc := r.taskDesc
+	if taskDesc == "" {
+		taskDesc = taskTitle
+	}
+	return &runtime.AgentTaskOutput{
+		Status:  runtime.OutputStatusSuccess,
+		Summary: fmt.Sprintf("项目「%s」已分解为 1 个阶段、1 个任务", input.Project.Name),
+		Phases: []runtime.PhaseAction{{
+			Name:        phaseName,
+			Description: fmt.Sprintf("围绕「%s」完成核心实现", input.Project.Name),
+			SortOrder:   1,
+		}},
+		Tasks: []runtime.TaskAction{{
+			PhaseName:   phaseName,
+			Title:       taskTitle,
+			Description: taskDesc,
+			Priority:    1,
+		}},
+	}, nil
 }
 
 // ---------- Audit Log Verification ----------
