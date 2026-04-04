@@ -118,7 +118,8 @@ func TestReviewerPrompt_ContainsScorecardSchema(t *testing.T) {
 func TestSupervisorPrompt_ContainsReviewPolicyOverrideRules(t *testing.T) {
 	prompt := buildSystemPrompt("supervisor", "")
 	required := []string{
-		"review_policy 表示默认模板上的 override",
+		"默认情况下不要输出 review_policy",
+		"只有任务存在明确专项要求时，才输出 review_policy",
 		"新增 score_items 最多 2 个",
 		"按 weight 降序、key 升序保留前 2 个，并记录裁剪痕迹",
 	}
