@@ -64,6 +64,8 @@ type ContractCtx struct {
 	VerificationPlan   []string         `json:"verification_plan,omitempty"`
 	AcceptanceCriteria []string         `json:"acceptance_criteria,omitempty"`
 	ReviewPolicy       *ReviewPolicyCtx `json:"review_policy,omitempty"`
+	ReviewPolicyReason string           `json:"review_policy_reason,omitempty"`
+	ReviewPolicySource []string         `json:"review_policy_source,omitempty"`
 }
 
 type ArtifactCtx struct {
@@ -125,6 +127,8 @@ type ContractAction struct {
 	TaskCategory       string   `json:"task_category,omitempty"`
 	ReviewTemplateKey  string   `json:"review_template_key,omitempty"`
 	ReviewPolicy       any      `json:"review_policy,omitempty"`
+	ReviewPolicyReason string   `json:"review_policy_reason,omitempty"`
+	ReviewPolicySource []string `json:"review_policy_source,omitempty"`
 }
 
 type AssignmentAction struct {

@@ -76,6 +76,26 @@ func TestValidateOutput_Supervisor_Valid(t *testing.T) {
 	}
 }
 
+func TestValidateOutput_Supervisor_ReviewPolicyRequiresReasonAndSource(t *testing.T) {
+	output := &AgentTaskOutput{
+		Status:  OutputStatusSuccess,
+		Summary: "契约已创建",
+		Contracts: []ContractAction{{
+			TaskTitle:          "task1",
+			Scope:              "scope",
+			DoneDefinition:     []string{"done1", "done2"},
+			AcceptanceCriteria: []string{"ac1"},
+			ReviewPolicy: map[string]any{
+				"pass_threshold": 85,
+			},
+		}},
+	}
+	err := ValidateOutput("supervisor", "", output)
+	if err == nil {
+		t.Fatal("expected validation error for review policy without reason/source")
+	}
+}
+
 func TestValidateOutput_Supervisor_MissingContracts(t *testing.T) {
 	output := &AgentTaskOutput{
 		Status:  OutputStatusSuccess,

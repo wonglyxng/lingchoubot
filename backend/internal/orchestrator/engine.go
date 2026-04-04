@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/lingchou/lingchoubot/backend/internal/model"
 	"github.com/lingchou/lingchoubot/backend/internal/repository"
@@ -1022,6 +1023,10 @@ func (e *Engine) loadContractContext(ctx context.Context, task *model.Task) (*ru
 	if err != nil {
 		return nil, fmt.Errorf("parse contract review_policy: %w", err)
 	}
+	reviewPolicyReason, reviewPolicySource, err := loadContractReviewPolicyOverrideContext(contract.Metadata)
+	if err != nil {
+		return nil, fmt.Errorf("parse contract review policy override context: %w", err)
+	}
 	if reviewPolicy == nil {
 		defaultPolicy, resolveErr := reviewpolicy.ResolvePolicy(inferTaskCategory(task), nil)
 		if resolveErr != nil {
@@ -1040,6 +1045,8 @@ func (e *Engine) loadContractContext(ctx context.Context, task *model.Task) (*ru
 	if reviewPolicy != nil {
 		contractCtx.ReviewPolicy = resolvedPolicyToRuntime(reviewPolicy)
 	}
+	contractCtx.ReviewPolicyReason = reviewPolicyReason
+	contractCtx.ReviewPolicySource = reviewPolicySource
 	return contractCtx, nil
 }
 
@@ -1076,6 +1083,14 @@ func buildReviewMetadata(artifactCtxs []runtime.ArtifactCtx, contractCtx *runtim
 		}
 		if action.PassThreshold == 0 {
 			metadata["pass_threshold"] = contractCtx.ReviewPolicy.PassThreshold
+		}
+	}
+	if contractCtx != nil {
+		if contractCtx.ReviewPolicyReason != "" {
+			metadata["review_policy_reason"] = contractCtx.ReviewPolicyReason
+		}
+		if len(contractCtx.ReviewPolicySource) > 0 {
+			metadata["review_policy_source"] = contractCtx.ReviewPolicySource
 		}
 	}
 	if action.TemplateKey != "" {
@@ -1116,6 +1131,20 @@ func buildContractMetadata(task *model.Task, action runtime.ContractAction) (map
 	if action.ReviewTemplateKey != "" && action.ReviewTemplateKey != resolved.TemplateKey {
 		return nil, fmt.Errorf("review_template_key %q does not match resolved template %q", action.ReviewTemplateKey, resolved.TemplateKey)
 	}
+	reviewPolicyReason := strings.TrimSpace(action.ReviewPolicyReason)
+	reviewPolicySource := normalizeReviewPolicySources(action.ReviewPolicySource)
+	if len(override) == 0 {
+		if reviewPolicyReason != "" || len(reviewPolicySource) > 0 {
+			return nil, fmt.Errorf("review_policy_reason/source requires review_policy override")
+		}
+	} else {
+		if reviewPolicyReason == "" {
+			return nil, fmt.Errorf("review_policy_reason is required when review_policy override is present")
+		}
+		if len(reviewPolicySource) == 0 {
+			return nil, fmt.Errorf("review_policy_source is required when review_policy override is present")
+		}
+	}
 	metadata := map[string]any{
 		"task_category":       resolved.TaskCategory,
 		"review_template_key": resolved.TemplateKey,
@@ -1123,6 +1152,8 @@ func buildContractMetadata(task *model.Task, action runtime.ContractAction) (map
 	}
 	if len(override) > 0 {
 		metadata["review_policy_override"] = override
+		metadata["review_policy_override_reason"] = reviewPolicyReason
+		metadata["review_policy_override_source"] = reviewPolicySource
 	}
 	return metadata, nil
 }
@@ -1164,6 +1195,20 @@ func loadContractReviewPolicy(raw model.JSON) (*reviewpolicy.ResolvedPolicy, err
 	return metadata.ReviewPolicy, nil
 }
 
+func loadContractReviewPolicyOverrideContext(raw model.JSON) (string, []string, error) {
+	if len(raw) == 0 {
+		return "", nil, nil
+	}
+	var metadata struct {
+		ReviewPolicyOverrideReason string   `json:"review_policy_override_reason"`
+		ReviewPolicyOverrideSource []string `json:"review_policy_override_source"`
+	}
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return "", nil, err
+	}
+	return strings.TrimSpace(metadata.ReviewPolicyOverrideReason), normalizeReviewPolicySources(metadata.ReviewPolicyOverrideSource), nil
+}
+
 func resolvedPolicyToRuntime(policy *reviewpolicy.ResolvedPolicy) *runtime.ReviewPolicyCtx {
 	if policy == nil {
 		return nil
@@ -1192,6 +1237,24 @@ func resolvedPolicyToRuntime(policy *reviewpolicy.ResolvedPolicy) *runtime.Revie
 		HardGates:     hardGates,
 		ScoreItems:    scoreItems,
 	}
+}
+
+func normalizeReviewPolicySources(raw []string) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	sources := make([]string, 0, len(raw))
+	for _, source := range raw {
+		source = strings.TrimSpace(source)
+		if source == "" {
+			continue
+		}
+		sources = append(sources, source)
+	}
+	if len(sources) == 0 {
+		return nil
+	}
+	return sources
 }
 
 func jsonArrayToStringsSafe(raw model.JSON) ([]string, error) {

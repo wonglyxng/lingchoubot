@@ -136,6 +136,20 @@ func validateSupervisorOutput(o *AgentTaskOutput) []string {
 		if len(c.AcceptanceCriteria) < 1 {
 			f = append(f, fmt.Sprintf("contract[%d].acceptance_criteria is empty", i))
 		}
+		if c.ReviewPolicy != nil {
+			if strings.TrimSpace(c.ReviewPolicyReason) == "" {
+				f = append(f, fmt.Sprintf("contract[%d].review_policy_reason is required when review_policy is present", i))
+			}
+			if len(c.ReviewPolicySource) == 0 {
+				f = append(f, fmt.Sprintf("contract[%d].review_policy_source is required when review_policy is present", i))
+			} else {
+				for j, source := range c.ReviewPolicySource {
+					if strings.TrimSpace(source) == "" {
+						f = append(f, fmt.Sprintf("contract[%d].review_policy_source[%d] is empty", i, j))
+					}
+				}
+			}
+		}
 	}
 	return f
 }

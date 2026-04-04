@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/lingchou/lingchoubot/backend/internal/model"
@@ -261,9 +262,11 @@ func TestTaskChainInputSortOffset(t *testing.T) {
 func TestBuildContractMetadata_PersistsTrimTraceForExtraScoreItems(t *testing.T) {
 	task := &model.Task{Title: "技术可行性评估与架构设计", Description: "输出架构设计"}
 	action := runtime.ContractAction{
-		TaskTitle:         task.Title,
-		TaskCategory:      "architecture",
-		ReviewTemplateKey: "architecture_v1",
+		TaskTitle:          task.Title,
+		TaskCategory:       "architecture",
+		ReviewTemplateKey:  "architecture_v1",
+		ReviewPolicyReason: "该任务涉及在线数据库迁移，需要突出迁移安全性",
+		ReviewPolicySource: []string{"task.description", "acceptance_criteria"},
 		ReviewPolicy: map[string]any{
 			"score_items": []map[string]any{
 				{
@@ -332,5 +335,36 @@ func TestBuildContractMetadata_PersistsTrimTraceForExtraScoreItems(t *testing.T)
 
 	if _, ok := metadata["review_policy_override"]; !ok {
 		t.Fatal("expected review_policy_override metadata to preserve original override")
+	}
+	if got := metadata["review_policy_override_reason"]; got != "该任务涉及在线数据库迁移，需要突出迁移安全性" {
+		t.Fatalf("metadata[review_policy_override_reason] = %#v", got)
+	}
+	sources, ok := metadata["review_policy_override_source"].([]string)
+	if !ok {
+		t.Fatalf("metadata[review_policy_override_source] type = %T, want []string", metadata["review_policy_override_source"])
+	}
+	if len(sources) != 2 || sources[0] != "task.description" || sources[1] != "acceptance_criteria" {
+		t.Fatalf("metadata[review_policy_override_source] = %#v, want [task.description acceptance_criteria]", sources)
+	}
+}
+
+func TestLoadContractReviewPolicyOverrideContext(t *testing.T) {
+	raw, err := json.Marshal(map[string]any{
+		"review_policy_override_reason": "该任务有迁移窗口约束",
+		"review_policy_override_source": []string{"task.description", "user instruction", " "},
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+
+	reason, sources, err := loadContractReviewPolicyOverrideContext(raw)
+	if err != nil {
+		t.Fatalf("loadContractReviewPolicyOverrideContext: %v", err)
+	}
+	if reason != "该任务有迁移窗口约束" {
+		t.Fatalf("reason = %q, want %q", reason, "该任务有迁移窗口约束")
+	}
+	if len(sources) != 2 || sources[0] != "task.description" || sources[1] != "user instruction" {
+		t.Fatalf("sources = %#v, want [task.description user instruction]", sources)
 	}
 }

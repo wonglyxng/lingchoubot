@@ -120,6 +120,9 @@ func TestSupervisorPrompt_ContainsReviewPolicyOverrideRules(t *testing.T) {
 	required := []string{
 		"默认情况下不要输出 review_policy",
 		"只有任务存在明确专项要求时，才输出 review_policy",
+		"必须同时输出 review_policy_reason 和 review_policy_source",
+		"review_policy_reason 必须明确说明",
+		"review_policy_source 必须列出专项要求依据来自哪里",
 		"新增 score_items 最多 2 个",
 		"按 weight 降序、key 升序保留前 2 个，并记录裁剪痕迹",
 	}
